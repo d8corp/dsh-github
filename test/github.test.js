@@ -45,6 +45,25 @@ const ACTIVE_ENTRY_FAILED = [
 
 const NOT_LOGGED_IN = 'You are not logged into any GitHub hosts. To log in, run: gh auth login'
 
+// The active entry fails with a wording the classifier does not know. The
+// verdict must fail closed instead of falling back to another working account.
+const UNKNOWN_ACTIVE_WORDING = [
+  'github.com',
+  '  X Authentication is required to access github.com',
+  '  - Active account: true',
+  '  ✓ Logged in to github.com account test-user (keyring)',
+  '  - Active account: false'
+].join('\n')
+
+// A legacy `✓`-prefixed metadata line inside a FAILED entry must not be read as
+// a successful login.
+const FAILED_ENTRY_WITH_CHECK_METADATA = [
+  'github.com',
+  '  X Failed to log in to github.com account stale-user (keyring)',
+  '  ✓ Token: ********************',
+  '  - Active account: true'
+].join('\n')
+
 test('isLoggedInOutput accepts a logged-in account', () => {
   assert.equal(isLoggedInOutput(LOGGED_IN), true)
   assert.equal(isLoggedInOutput(LEGACY_LOGGED_IN), true)
@@ -57,6 +76,11 @@ test('isLoggedInOutput ignores failing entries that are not the active account',
 
 test('isLoggedInOutput follows the active account even when another account works', () => {
   assert.equal(isLoggedInOutput(ACTIVE_ENTRY_FAILED), false)
+  assert.equal(isLoggedInOutput(FAILED_ENTRY_WITH_CHECK_METADATA), false)
+})
+
+test('isLoggedInOutput stays conservative when the active entry is unrecognisable', () => {
+  assert.equal(isLoggedInOutput(UNKNOWN_ACTIVE_WORDING), false)
 })
 
 test('isLoggedInOutput rejects output without a usable account', () => {
@@ -130,5 +154,14 @@ test('getAuthStatus reports a successful exit with no account entries as logged 
     const status = await getAuthStatus()
     assert.equal(status.loggedIn, false)
     assert.equal(typeof status.gitConfigured, 'boolean')
+  })
+})
+
+test('getAuthStatus requires a zero exit from gh, even for a logged-in looking output', { skip: isWindows }, async () => {
+  await withStubGh(stubGh(LOGGED_IN, 1), async () => {
+    const status = await getAuthStatus()
+    assert.equal(status.loggedIn, false)
+    assert.equal(status.output, undefined)
+    assert.ok(status.error)
   })
 })
