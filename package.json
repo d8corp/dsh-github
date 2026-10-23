@@ -21,7 +21,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-credentials": ">=0.2.0-rc.0"
