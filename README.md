@@ -6,8 +6,8 @@ DSH plugin for GitHub CLI (`gh`) integration: configure a GitHub App and authent
 
 Open **Settings → GitHub**:
 
-- Статус CLI: **Требуется установка** / **Готово**
-- Подключение: **Ожидает настройки** / **Подключено**
+- CLI Status: **Install required** / **Ready**
+- Connection: **Pending setup** / **Connected**
 - Install GitHub CLI if missing
 - App ID, Installation ID
 - Upload private key (.pem); key is stored on host (mode 0600), never returned to browser
