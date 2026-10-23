@@ -1,0 +1,5 @@
+# dsh-github profile patch layer.
+# Registers the GitHub CLI integration (settings + host API).
+- insert:
+    - id: github
+      name: 'dsh-github'
