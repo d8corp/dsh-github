@@ -1,0 +1,24 @@
+import { getReact } from '../../utils'
+
+export interface InputProps {
+  value: string
+  onChange: (value: string) => void
+  type?: 'text' | 'email'
+  placeholder?: string
+  disabled?: boolean
+}
+
+export function Input ({ value, onChange, type = 'text', placeholder, disabled }: InputProps) {
+  const React = getReact()
+
+  return (
+    <input
+      className='gh-input'
+      type={type}
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+    />
+  )
+}
