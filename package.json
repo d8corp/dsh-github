@@ -1,6 +1,6 @@
 {
   "name": "@d8corp/dsh-github",
-  "version": "0.0.1",
+  "version": "0.0.2-beta.1",
   "private": true,
   "description": "GitHub CLI (gh) integration for DSH: configure a GitHub App and authenticate gh for git operations.",
   "type": "module",
@@ -31,9 +31,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "npm run build:client && innetjs release -tc -lc -e",
+    "build": "npm run build:theme && npm run build:client && innetjs release -tc -lc -e",
     "build:client": "innetjs build -i client -tc -lc -e",
-    "release": "npm run build:client && innetjs release -p -tc -lc -e",
+    "build:theme": "innetjs run buildEnv.ts -e",
+    "release": "npm run build:theme && npm run build:client && innetjs release -p -tc -lc -e",
     "test": "jest",
     "lint": "eslint src --ext .ts,.tsx",
     "lint:fix": "eslint src --ext .ts,.tsx --fix"
