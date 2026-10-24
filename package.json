@@ -32,6 +32,7 @@
   },
   "scripts": {
     "build": "innetjs release -i \"{index,client}\" -tc -lc -e",
+    "release": "innetjs release -i \"{index,client}\" -p -tc -lc -e",
     "test": "jest",
     "lint": "eslint src --ext .ts,.tsx",
     "lint:fix": "eslint src --ext .ts,.tsx --fix"

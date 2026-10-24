@@ -1,0 +1,120 @@
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { randomBytes } from "node:crypto";
+import { homedir } from "node:os";
+// src/settings.ts
+/**
+* Host-side settings for @d8corp/dsh-github.
+*
+* Stored at `$DSH_HOME/github.json` (or `~/.dsh/github.json`). The private key
+* is never stored here — only its path on the host (the key lives in a
+* separate 0600 file).
+*/
+const MAX_ID_CHARS = 64;
+const MAX_GIT_NAME_CHARS = 128;
+const MAX_GIT_EMAIL_CHARS = 255;
+/**
+* Expand a leading `~` to the current user's home directory. `~user/...` is
+* deliberately left alone, matching the harness home-path helper.
+*
+* @param value configured path.
+* @returns the path with `~` (or `~/`) expanded.
+*/
+function expandHome(value) {
+	if (value === "~") return homedir();
+	if (value.startsWith("~/") || value.startsWith("~\\")) return join(homedir(), value.slice(2));
+	return value;
+}
+/**
+* Resolve the DeepSeek Harness home: `$DSH_HOME` when set, otherwise `~/.dsh`.
+*
+* The configured value is `~`-expanded and resolved to an absolute path, so
+* `DSH_HOME=~/harness` means `$HOME/harness` — never a literal `./~` directory
+* relative to the server's working directory.
+*
+* Kept local on purpose — the host half must load with no runtime dependency
+* beyond Node built-ins, so no `@deepseek-ai/*` helper package is imported here.
+*
+* @returns the absolute harness home directory.
+*/
+function dshHomeDir(env = process.env) {
+	const configured = env && typeof env.DSH_HOME === "string" ? env.DSH_HOME.trim() : "";
+	return resolve(configured === "" ? join(homedir(), ".dsh") : expandHome(configured));
+}
+function settingsPath(env = process.env) {
+	return join(dshHomeDir(env), "github.json");
+}
+function isPlainObject(value) {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function normalizeId(value) {
+	if (typeof value === "number" && Number.isFinite(value)) value = String(Math.trunc(value));
+	if (typeof value !== "string") return "";
+	const trimmed = value.trim();
+	if (trimmed === "") return "";
+	return trimmed.slice(0, MAX_ID_CHARS);
+}
+function normalizePath(value) {
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	if (trimmed === "") return null;
+	return trimmed;
+}
+function normalizeSettings(value) {
+	const source = isPlainObject(value) ? value : {};
+	return {
+		appId: normalizeId(source.appId),
+		installationId: normalizeId(source.installationId),
+		gitUserName: typeof source.gitUserName === "string" ? source.gitUserName.trim().slice(0, MAX_GIT_NAME_CHARS) : "",
+		gitUserEmail: typeof source.gitUserEmail === "string" ? source.gitUserEmail.trim().slice(0, MAX_GIT_EMAIL_CHARS) : "",
+		keyPath: normalizePath(source.keyPath),
+		keyFileName: typeof source.keyFileName === "string" && source.keyFileName.trim() !== "" ? source.keyFileName.trim().slice(0, 255) : null
+	};
+}
+function readSettings(file = settingsPath()) {
+	try {
+		return normalizeSettings(JSON.parse(readFileSync(file, "utf8")));
+	} catch {
+		return normalizeSettings({});
+	}
+}
+function writeSettings(settings, file = settingsPath()) {
+	const normalized = normalizeSettings(settings);
+	const directory = dirname(file);
+	mkdirSync(directory, { recursive: true });
+	const temp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+	const payload = `${JSON.stringify(normalized, null, 2)}\n`;
+	let handle;
+	try {
+		handle = openSync(temp, "w", 384);
+		writeFileSync(handle, payload, "utf8");
+		fsyncSync(handle);
+		closeSync(handle);
+		handle = void 0;
+	} catch (error) {
+		if (handle !== void 0) try {
+			closeSync(handle);
+		} catch {}
+		try {
+			unlinkSync(temp);
+		} catch {}
+		throw error;
+	}
+	try {
+		renameSync(temp, file);
+	} catch (error) {
+		try {
+			unlinkSync(temp);
+		} catch {}
+		throw error;
+	}
+	try {
+		chmodSync(file, 384);
+	} catch {}
+	return normalized;
+}
+function keyFileExists(settings) {
+	const s = normalizeSettings(settings);
+	return !!s.keyPath && existsSync(s.keyPath);
+}
+export { dshHomeDir, keyFileExists, normalizeSettings, readSettings, settingsPath, writeSettings };
