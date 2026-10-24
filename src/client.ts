@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// dsh-github — browser half: the Settings → GitHub section.
+// @d8corp/dsh-github — browser half: the Settings → GitHub section.
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -72,7 +72,7 @@ interface GithubSettingsRowOptions {
 }
 
 window.__ModuleLoader__.load({
-  id: 'dsh-github',
+  id: '@d8corp/dsh-github',
   factory: (require) => {
     const React = require('react') as typeof ReactTypes
     const h = React.createElement
@@ -143,7 +143,7 @@ window.__ModuleLoader__.load({
     // #endregion
 
     // #region styles
-    const STYLE_ID = '@dsh-github/settings.css'
+    const STYLE_ID = '@d8corp/dsh-github/settings.css'
 
     const CSS = `
 .gh-section{display:flex;flex-direction:column;width:100%;color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px}
@@ -192,7 +192,7 @@ window.__ModuleLoader__.load({
       if (typeof document === 'undefined' || !document.head) return
       if (document.querySelector('style[data-plugin-css="' + STYLE_ID + '"]') !== null) return
       const tag = document.createElement('style')
-      tag.dataset.plugin = 'dsh-github'
+      tag.dataset.plugin = '@d8corp/dsh-github'
       tag.dataset.pluginCss = STYLE_ID
       tag.textContent = CSS
       document.head.appendChild(tag)

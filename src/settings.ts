@@ -1,5 +1,5 @@
 /**
- * Host-side settings for dsh-github.
+ * Host-side settings for @d8corp/dsh-github.
  *
  * Stored at `$DSH_HOME/github.json` (or `~/.dsh/github.json`). The private key
  * is never stored here — only its path on the host (the key lives in a

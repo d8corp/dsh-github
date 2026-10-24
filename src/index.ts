@@ -20,7 +20,7 @@ export const inject = ['webServer', 'webStartup', 'credentials']
 export function apply (ctx: PluginContext): void {
   const trustedHosts = buildTrustedHosts(ctx.webStartup && ctx.webStartup.trustedHosts, (message) => {
     // eslint-disable-next-line no-console
-    console.warn('[dsh-github] ignoring invalid trusted host:', message)
+    console.warn('[@d8corp/dsh-github] ignoring invalid trusted host:', message)
   })
 
   const handler = createApiHandler(ctx, { trustedHosts })
@@ -29,5 +29,5 @@ export function apply (ctx: PluginContext): void {
     kind: 'prefix',
     path: API_PREFIX,
     handler,
-  }), 'dsh-github: api')
+  }), '@d8corp/dsh-github: api')
 }

@@ -1,4 +1,4 @@
-# dsh-github
+# @d8corp/dsh-github
 
 DSH plugin for GitHub CLI (`gh`) integration: configure a GitHub App and authenticate `gh` so the agent can use git/GitHub operations.
 
