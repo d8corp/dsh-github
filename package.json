@@ -4,18 +4,12 @@
   "private": true,
   "description": "GitHub CLI (gh) integration for DSH: configure a GitHub App and authenticate gh for git operations.",
   "type": "module",
-  "main": "lib/index.js",
+  "main": "index.mjs",
   "exports": {
-    ".": "./lib/index.js",
-    "./client": "./lib/client.js",
+    ".": "./index.mjs",
+    "./client": "./client.mjs",
     "./package.json": "./package.json"
   },
-  "files": [
-    "lib",
-    "cordis.patch.yml",
-    "README.md",
-    "LICENSE"
-  ],
   "author": "Mikhail Lysikov <d8corp@mail.ru>",
   "license": "MIT",
   "repository": {
@@ -36,7 +30,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "build": "innetjs release -i \"{index,client}\" -tc -lc -e",
+    "test": "jest",
+    "lint": "eslint src --ext .ts,.tsx",
+    "lint:fix": "eslint src --ext .ts,.tsx --fix"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-credentials": ">=0.2.0-rc.0"
@@ -59,15 +56,20 @@
     }
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.2",
     "@types/jest": "^30.0.0",
     "@types/node": "^20.2.1",
+    "@types/react": "18.3.31",
     "eslint": "^9.39.5",
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-jest": "^29.16.0",
     "eslint-plugin-simple-import-sort": "^14.0.0",
     "eslint-plugin-unused-imports": "^4.4.1",
-    "innetjs": "^3.2.6",
+    "innetjs": "^4.0.0-beta.8",
     "jest": "^30.4.2",
     "jest-environment-jsdom": "^30.4.1",
     "jest-util": "^29.5.0",

@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "rootDir": "src",
+    "outDir": "lib",
     "target": "ES2018",
     "lib": [
       "dom",
@@ -8,13 +9,13 @@
       "esnext"
     ],
     "types": ["node", "jest"],
-    "allowJs": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "rewriteRelativeImportExtensions": true,
     "resolveJsonModule": true,
     "strict": true,
     "declaration": true,
