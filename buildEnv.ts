@@ -7,7 +7,8 @@ import * as sass from 'sass'
 
 const INPUT_SCSS = 'theme.scss'
 const OUTPUT_ENV = '.env.theme'
-const CSS_KEY = 'CSS'
+// innetjs only exposes INNETJS_-prefixed variables to the client bundle.
+const CSS_KEY = 'INNETJS_CSS'
 
 const minifier = postcss([cssnano({ preset: 'default' })])
 

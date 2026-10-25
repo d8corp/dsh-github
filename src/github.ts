@@ -2,12 +2,15 @@ import { spawn } from 'node:child_process'
 import { createPrivateKey, createSign } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 
-import { DEFAULT_HOSTNAME } from './constants'
+import { DEFAULT_HOSTNAME, TOKEN_TTL_SECONDS } from './constants'
 import type { GithubSettings } from './settings'
+import { readSettings, writeSettings } from './settings'
 
 export interface RunOptions {
   cwd?: string
   env?: NodeJS.ProcessEnv
+  /** Variables to drop from the inherited environment before spawning. */
+  unset?: string[]
   timeout?: number
   input?: string
 }
@@ -57,12 +60,14 @@ export interface ConnectResult {
 }
 
 type TokenResult =
-  | { ok: true, token: string }
+  | { ok: true, token: string, expiresAt: number | null }
   | { ok: false, error: string }
 
 function run (command: string, args: string[], options: RunOptions = {}): Promise<RunResult> {
   return new Promise((resolve) => {
-    const env = options.env ? { ...process.env, ...options.env } : process.env
+    // Always copy: `unset` must never mutate the host environment.
+    const env: NodeJS.ProcessEnv = { ...process.env, ...(options.env || {}) }
+    for (const key of options.unset || []) delete env[key]
 
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -104,10 +109,49 @@ function run (command: string, args: string[], options: RunOptions = {}): Promis
     child.on('error', (error) => finish(1, error))
     child.on('close', (code) => finish(code, null))
 
+    // A child that exits before reading stdin (for example `gh auth logout`
+    // when no account is signed in) closes the pipe under us; without this
+    // handler the resulting EPIPE surfaces as an unhandled stream error and
+    // takes the host process down.
+    child.stdin.on('error', () => { /* ignore */ })
+
     try {
       if (options.input != null) child.stdin.write(options.input)
       child.stdin.end()
     } catch { /* ignore */ }
+  })
+}
+
+/**
+ * Environment variables `gh` accepts as a token source.
+ *
+ * When any of them is set, `gh auth login` and `gh auth logout` refuse to
+ * touch gh's own credential store ("…first clear the value from the
+ * environment"), and `gh auth status` reports the environment token instead
+ * of the stored credentials. The plugin exports the installation token into
+ * its own process environment for the agent, so every auth-management command
+ * has to run without them — otherwise the second Connect in one server
+ * lifetime always fails, and Disconnect never removes the stored credentials.
+ */
+const GH_TOKEN_ENV_KEYS = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+]
+
+/**
+ * Run a `gh auth` subcommand with the token environment removed, so it reads
+ * and writes gh's credential store rather than the ambient token.
+ *
+ * @param args `gh` arguments, starting after the binary name.
+ * @param options spawn options; `unset` entries are added, never replaced.
+ * @returns the command result.
+ */
+function runGhAuth (args: string[], options: RunOptions = {}): Promise<RunResult> {
+  return run('gh', args, {
+    ...options,
+    unset: [...(options.unset || []), ...GH_TOKEN_ENV_KEYS],
   })
 }
 
@@ -200,7 +244,7 @@ export function isLoggedInOutput (output: unknown): boolean {
 }
 
 export async function getAuthStatus (hostname = DEFAULT_HOSTNAME): Promise<AuthStatus> {
-  const result = await run('gh', ['auth', 'status', '--hostname', hostname])
+  const result = await runGhAuth(['auth', 'status', '--hostname', hostname])
   const output = `${result.stdout}\n${result.stderr}`.trim()
   const loggedIn = result.code === 0 && isLoggedInOutput(output)
 
@@ -316,6 +360,19 @@ function apiBaseFor (hostname: string): string {
   return hostname === 'github.com' ? 'https://api.github.com' : `https://${hostname}/api/v3`
 }
 
+/**
+ * Parse the GitHub API `expires_at` field (ISO-8601) into epoch milliseconds.
+ *
+ * @param value raw `expires_at` field of the access-token response.
+ * @returns epoch milliseconds, or null when missing or unparsable.
+ */
+function parseTokenExpiry (value: unknown): number | null {
+  if (typeof value !== 'string' || value.trim() === '') return null
+  const ms = Date.parse(value)
+
+  return Number.isFinite(ms) ? ms : null
+}
+
 async function fetchInstallationToken (jwt: string, installationId: string, hostname: string): Promise<TokenResult> {
   const url = `${apiBaseFor(hostname)}/app/installations/${encodeURIComponent(String(installationId))}/access_tokens`
   let response: Response
@@ -353,7 +410,9 @@ async function fetchInstallationToken (jwt: string, installationId: string, host
     return { ok: false, error: 'No installation token in GitHub API response' }
   }
 
-  return { ok: true, token: data.token }
+  const expiresAt = parseTokenExpiry((data as { expires_at?: unknown }).expires_at)
+
+  return { ok: true, token: data.token, expiresAt }
 }
 
 export async function connect (settings?: Partial<GithubSettings> | null): Promise<ConnectResult> {
@@ -392,7 +451,7 @@ export async function connect (settings?: Partial<GithubSettings> | null): Promi
 
   const token = tokenResult.token
 
-  const login = await run('gh', [
+  const login = await runGhAuth([
     'auth', 'login',
     '--hostname', DEFAULT_HOSTNAME,
     '--with-token',
@@ -405,7 +464,22 @@ export async function connect (settings?: Partial<GithubSettings> | null): Promi
     return { ok: false, error: msg }
   }
 
-  const setup = await run('gh', ['auth', 'setup-git'], { timeout: 120000 })
+  // `gh auth login` accepted the token, so it is active from this moment on.
+  // Record the authoritative API expiry when GitHub sent one, otherwise the
+  // documented one-hour lifetime. Persisting the lifetime is best-effort: a
+  // settings-write failure must never turn a successful connect into a failure.
+  const issuedAt = Date.now()
+  const expiresAt = tokenResult.expiresAt ?? issuedAt + TOKEN_TTL_SECONDS * 1000
+
+  try {
+    writeSettings({
+      ...readSettings(),
+      tokenIssuedAt: new Date(issuedAt).toISOString(),
+      tokenExpiresAt: new Date(expiresAt).toISOString(),
+    })
+  } catch { /* lifetime tracking is best-effort */ }
+
+  const setup = await runGhAuth(['auth', 'setup-git'], { timeout: 120000 })
 
   if (setup.code !== 0) {
     const msg = (setup.stderr || setup.stdout || 'gh auth setup-git failed').trim()
@@ -422,9 +496,13 @@ export async function connect (settings?: Partial<GithubSettings> | null): Promi
 }
 
 export async function disconnect (): Promise<{ ok: true }> {
-  await run('gh', ['auth', 'logout', '--hostname', DEFAULT_HOSTNAME], { timeout: 60000, input: 'y\n' })
+  await runGhAuth(['auth', 'logout', '--hostname', DEFAULT_HOSTNAME], { timeout: 60000, input: 'y\n' })
   delete process.env.GH_TOKEN
   delete process.env.GITHUB_TOKEN
+
+  try {
+    writeSettings({ ...readSettings(), tokenIssuedAt: null, tokenExpiresAt: null })
+  } catch { /* lifetime tracking is best-effort */ }
 
   return { ok: true }
 }

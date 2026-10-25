@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import {
   KEY_FILENAME,
   MAX_BODY_BYTES,
+  TOKEN_TTL_SECONDS,
 } from './constants'
 import {
   isTrustedApiRequest,
@@ -49,6 +50,19 @@ interface ApiError {
   message: string
 }
 
+/**
+ * Parse a persisted ISO-8601 token timestamp into epoch milliseconds.
+ *
+ * @param value ISO string stored in settings, or null.
+ * @returns epoch milliseconds, or null when missing or unparsable.
+ */
+function tokenTime (value: string | null): number | null {
+  if (typeof value !== 'string' || value.trim() === '') return null
+  const ms = Date.parse(value)
+
+  return Number.isFinite(ms) ? ms : null
+}
+
 function errorMessage (error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback
 }
@@ -77,6 +91,12 @@ async function statusPayload (): Promise<{
     hasKey: boolean
   }
   auth: StatusAuth
+  token: {
+    issuedAt: number | null
+    expiresAt: number | null
+    ttlSeconds: number
+    active: boolean
+  }
   gitIdentity: GitIdentity
 }> {
   const settings = readSettings()
@@ -102,6 +122,12 @@ async function statusPayload (): Promise<{
       hasKey: keyFileExists(settings),
     },
     auth,
+    token: {
+      issuedAt: tokenTime(settings.tokenIssuedAt),
+      expiresAt: tokenTime(settings.tokenExpiresAt),
+      ttlSeconds: TOKEN_TTL_SECONDS,
+      active: auth.loggedIn,
+    },
     gitIdentity,
   }
 }

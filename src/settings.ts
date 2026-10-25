@@ -29,6 +29,8 @@ export interface GithubSettings {
   gitUserEmail: string
   keyPath: string | null
   keyFileName: string | null
+  tokenIssuedAt: string | null
+  tokenExpiresAt: string | null
 }
 
 const MAX_ID_CHARS = 64
@@ -92,6 +94,36 @@ function normalizePath (value: unknown): string | null {
   return trimmed
 }
 
+/**
+ * Normalize a persisted token timestamp to canonical ISO-8601 UTC.
+ *
+ * Accepts a parseable date string or a finite, non-negative epoch-millisecond
+ * number; anything else — objects, arrays, `"nonsense"`, `NaN`, negative or
+ * out-of-range numbers — normalizes to `null` instead of throwing.
+ *
+ * @param value candidate timestamp read from settings JSON.
+ * @returns canonical ISO string, or null when the value is unusable.
+ */
+function normalizeTimestamp (value: unknown): string | null {
+  let ms: number
+
+  if (typeof value === 'number') {
+    ms = value
+  } else if (typeof value === 'string' && value.trim() !== '') {
+    ms = Date.parse(value)
+  } else {
+    return null
+  }
+
+  if (!Number.isFinite(ms) || ms < 0) return null
+
+  try {
+    return new Date(ms).toISOString()
+  } catch {
+    return null
+  }
+}
+
 export function normalizeSettings (value: unknown): GithubSettings {
   const source: Record<string, unknown> = isPlainObject(value) ? value : {}
 
@@ -104,6 +136,8 @@ export function normalizeSettings (value: unknown): GithubSettings {
     keyFileName: typeof source.keyFileName === 'string' && source.keyFileName.trim() !== ''
       ? source.keyFileName.trim().slice(0, 255)
       : null,
+    tokenIssuedAt: normalizeTimestamp(source.tokenIssuedAt),
+    tokenExpiresAt: normalizeTimestamp(source.tokenExpiresAt),
   }
 }
 
@@ -117,6 +151,8 @@ export function mergeSettings (current: unknown, patch: unknown): GithubSettings
   if (Object.prototype.hasOwnProperty.call(patch, 'gitUserEmail')) next.gitUserEmail = patch.gitUserEmail
   if (Object.prototype.hasOwnProperty.call(patch, 'keyPath')) next.keyPath = patch.keyPath
   if (Object.prototype.hasOwnProperty.call(patch, 'keyFileName')) next.keyFileName = patch.keyFileName
+  if (Object.prototype.hasOwnProperty.call(patch, 'tokenIssuedAt')) next.tokenIssuedAt = patch.tokenIssuedAt
+  if (Object.prototype.hasOwnProperty.call(patch, 'tokenExpiresAt')) next.tokenExpiresAt = patch.tokenExpiresAt
 
   return normalizeSettings(next)
 }

@@ -104,6 +104,26 @@
   min-width: 0;
 }
 
+.gh-timer {
+  display: inline-block;
+  box-sizing: border-box;
+  min-width: 72px;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  line-height: 22px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary);
+
+  &-soon {
+    color: var(--dsw-alias-state-warn-primary);
+  }
+
+  &-expired {
+    color: var(--dsw-alias-state-error-primary);
+  }
+}
+
 .gh-input {
   box-sizing: border-box;
   border: none;

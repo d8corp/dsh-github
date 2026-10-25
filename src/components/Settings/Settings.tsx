@@ -1,12 +1,14 @@
 import type * as ReactTypes from 'react'
 
+import { TOKEN_TTL_SECONDS } from '../../constants'
 import { Button } from '../../ui/Button'
+import { Countdown } from '../../ui/Countdown'
 import { FileInput } from '../../ui/FileInput'
 import { Input } from '../../ui/Input'
 import { Notice } from '../../ui/Notice'
 import { Row } from '../../ui/Raw'
 import { Status } from '../../ui/Status'
-import { callApi, errorMessage, getReact } from '../../utils'
+import { callApi, errorMessage, getReact, readStoredIssuedAt, resolveTokenExpiry, storeIssuedAt } from '../../utils'
 
 interface GithubToolState {
   installed: boolean
@@ -33,6 +35,13 @@ interface GithubIdentityState {
   email: string
 }
 
+interface GithubTokenState {
+  issuedAt: number | null
+  expiresAt: number | null
+  ttlSeconds: number
+  active: boolean
+}
+
 interface GithubStatus {
   gh: GithubToolState
   git: GithubToolState
@@ -40,6 +49,7 @@ interface GithubStatus {
   config: GithubConfigState
   auth: GithubAuthState
   gitIdentity: GithubIdentityState
+  token?: GithubTokenState
 }
 
 interface GithubActionResult {
@@ -169,6 +179,7 @@ export function Settings () {
         throw new Error(result.connect.error || 'Connect failed.')
       }
 
+      storeIssuedAt(Date.now())
       setMessage({ kind: 'success', text: 'Connected.' })
     })
   }
@@ -176,6 +187,7 @@ export function Settings () {
   async function handleDisconnect (): Promise<void> {
     await withBusy(async () => {
       await callApi('disconnect')
+      storeIssuedAt(null)
       setMessage({ kind: 'success', text: 'Disconnected.' })
     })
   }
@@ -192,6 +204,23 @@ export function Settings () {
   const git = (status && (status.git || status.gitInfo)) || { installed: false, version: null }
   const config = (status && status.config) || { hasKey: false, keyFileName: null, appId: '', installationId: '', gitUserName: '', gitUserEmail: '' }
   const auth = (status && status.auth) || { loggedIn: false, gitConfigured: false }
+  const token = status && status.token
+
+  const ttlSeconds = token && typeof token.ttlSeconds === 'number' && Number.isFinite(token.ttlSeconds)
+    ? token.ttlSeconds
+    : TOKEN_TTL_SECONDS
+
+  const hostExpiresAt = token && typeof token.expiresAt === 'number' ? token.expiresAt : null
+
+  const tokenExpiresAt = auth.loggedIn
+    ? resolveTokenExpiry(hostExpiresAt, readStoredIssuedAt(), ttlSeconds * 1000)
+    : null
+
+  // The countdown belongs to the Connection section: it shows the remaining
+  // lifetime of the installation token issued by the current connection.
+  function handleTokenExpired (): void {
+    refresh()
+  }
 
   // CLI status
   let cliStateLabel = 'Ready'
@@ -334,7 +363,12 @@ export function Settings () {
         title='Connection'
         description={connDesc}
         badge={<Status state={connStateClass} label={connStateLabel} />}
-        control={connectionControl}
+        control={(
+          <>
+            <Countdown expiresAt={tokenExpiresAt} onExpired={handleTokenExpired} />
+            {connectionControl}
+          </>
+        )}
       />
       {message ? <Notice kind={message.kind} text={message.text} /> : null}
     </div>
