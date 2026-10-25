@@ -12,3 +12,6 @@ export const KEY_FILENAME = 'github-app.pem'
 
 /** Default hostname for GitHub. */
 export const DEFAULT_HOSTNAME = 'github.com'
+
+/** GitHub App installation access tokens are issued for one hour. */
+export const TOKEN_TTL_SECONDS = 3600
