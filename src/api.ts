@@ -1,13 +1,14 @@
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 
 import {
-  KEY_FILENAME,
+  KEY_ENCRYPTED_FILENAME,
   MAX_BODY_BYTES,
   TOKEN_TTL_SECONDS,
 } from './constants'
 import {
+  isLoopbackRequest,
   isTrustedApiRequest,
   PAYLOAD_TOO_LARGE,
   readJsonBody,
@@ -25,6 +26,8 @@ import {
   installGit,
   setGitIdentity,
 } from './github'
+import { encryptPrivateKey, passphraseError } from './keyCrypto'
+import { isInsideDshHome, removeSecretFile, writeSecretFile } from './secureFile'
 import type { GithubSettings } from './settings'
 import {
   dshHomeDir,
@@ -48,6 +51,75 @@ interface ToolStatus {
 
 interface ApiError {
   message: string
+}
+
+/**
+ * The slice of the DSH `connection` service this plugin relies on. It is
+ * looked up lazily so the plugin keeps loading in profiles that have no
+ * browser connection, where non-loopback requests then fail closed.
+ */
+interface ConnectionLike {
+  requestRejection?: (request: IncomingMessage) => unknown
+}
+
+interface PluginContext {
+  connection?: ConnectionLike
+  get?: (name: string) => unknown
+}
+
+/**
+ * Resolve the connection service for browser-session verification.
+ *
+ * @param ctx plugin context.
+ * @returns the service, or undefined when this profile has none.
+ */
+function resolveConnection (ctx: unknown): ConnectionLike | undefined {
+  if (ctx === null || typeof ctx !== 'object') return undefined
+
+  const candidate = ctx as PluginContext
+  let direct: ConnectionLike | undefined
+
+  try {
+    direct = candidate.connection
+  } catch { /* unknown services throw on some context proxies */ }
+
+  if (direct && typeof direct.requestRejection === 'function') return direct
+
+  if (typeof candidate.get === 'function') {
+    try {
+      const service = candidate.get('connection') as ConnectionLike | undefined
+
+      if (service && typeof service.requestRejection === 'function') return service
+    } catch { /* service lookup can fail while the host boots */ }
+  }
+
+  return undefined
+}
+
+/**
+ * Require a live DSH browser session for a non-loopback request.
+ *
+ * @param ctx plugin context.
+ * @param req incoming request.
+ * @returns undefined when admitted, otherwise the HTTP status to return.
+ */
+function sessionRejection (ctx: unknown, req: IncomingMessage): number | undefined {
+  const connection = resolveConnection(ctx)
+
+  // Without a verifier the safe answer for a remote authority is "no".
+  if (!connection || typeof connection.requestRejection !== 'function') return 403
+
+  let rejection: unknown
+
+  try {
+    rejection = connection.requestRejection(req)
+  } catch {
+    return 403
+  }
+
+  if (rejection === undefined) return undefined
+
+  return rejection === 401 ? 401 : 403
 }
 
 /**
@@ -75,6 +147,22 @@ function fail (res: ServerResponse, status: number, message: string): void {
   writeJson(res, status, { ok: false, error: { message } as ApiError })
 }
 
+/**
+ * Encrypt a PEM and store it at the fixed encrypted-key path.
+ *
+ * @param pem PEM text.
+ * @param passphrase user passphrase; never persisted.
+ * @returns the path of the written envelope.
+ */
+async function writeEncryptedKey (pem: string, passphrase: string): Promise<string> {
+  const envelope = await encryptPrivateKey(pem, passphrase)
+  const keyPath = join(dshHomeDir(), KEY_ENCRYPTED_FILENAME)
+
+  writeSecretFile(keyPath, envelope)
+
+  return keyPath
+}
+
 async function statusPayload (): Promise<{
   gh: ToolStatus
   git: ToolStatus
@@ -89,6 +177,7 @@ async function statusPayload (): Promise<{
     gitUserEmail: string
     keyFileName: string | null
     hasKey: boolean
+    keyEncrypted: boolean
   }
   auth: StatusAuth
   token: {
@@ -120,6 +209,7 @@ async function statusPayload (): Promise<{
       gitUserEmail: settings.gitUserEmail,
       keyFileName: settings.keyFileName,
       hasKey: keyFileExists(settings),
+      keyEncrypted: settings.keyEncrypted,
     },
     auth,
     token: {
@@ -132,12 +222,31 @@ async function statusPayload (): Promise<{
   }
 }
 
-export function createApiHandler (_ctx: unknown, { trustedHosts }: { trustedHosts: string[] }): ApiHandler {
+export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts: string[] }): ApiHandler {
   return async (req, res) => {
     if (!isTrustedApiRequest(req, trustedHosts)) {
       fail(res, 403, 'Untrusted request')
 
       return
+    }
+
+    // Loopback is the local trust boundary. Every remote authority must also
+    // present a live DSH browser session: Host/Origin checks alone let anyone
+    // who can reach the port replace the key or wipe the configuration.
+    if (!isLoopbackRequest(req)) {
+      const rejection = sessionRejection(ctx, req)
+
+      if (rejection !== undefined) {
+        fail(
+          res,
+          rejection,
+          rejection === 401
+            ? 'Authentication required: open the DSH Web UI from its printed URL.'
+            : 'Untrusted request',
+        )
+
+        return
+      }
     }
 
     const method = (req.method || 'GET').toUpperCase()
@@ -205,33 +314,56 @@ export function createApiHandler (_ctx: unknown, { trustedHosts }: { trustedHost
 
           // handle pem upload
           if (typeof payload.pemBase64 === 'string' && payload.pemBase64.trim() !== '') {
-            let pemText: string
+            const invalid = passphraseError(payload.passphrase)
 
-            try {
-              pemText = Buffer.from(payload.pemBase64, 'base64').toString('utf8')
-            } catch {
-              fail(res, 400, 'Invalid key encoding')
+            if (invalid !== null) {
+              fail(res, 400, invalid)
 
               return
             }
 
+            const pemBuffer = Buffer.from(payload.pemBase64, 'base64')
+            let pemText = pemBuffer.toString('utf8')
+
             if (!/PRIVATE KEY-----/.test(pemText)) {
+              pemBuffer.fill(0)
               fail(res, 400, 'Invalid private key format')
 
               return
             }
 
-            const keyPath = join(dshHomeDir(), KEY_FILENAME)
-            mkdirSync(dirname(keyPath), { recursive: true })
-            writeFileSync(keyPath, pemText, { mode: 0o600 })
+            let keyPath: string
+
+            try {
+              keyPath = await writeEncryptedKey(pemText, payload.passphrase as string)
+            } catch (error) {
+              fail(res, 500, errorMessage(error, 'Cannot store encrypted private key'))
+
+              return
+            } finally {
+              pemText = ''
+              pemBuffer.fill(0)
+            }
+
             patch.keyPath = keyPath
+            patch.keyEncrypted = true
 
             patch.keyFileName = typeof payload.pemFileName === 'string' && payload.pemFileName.trim() !== ''
               ? payload.pemFileName.trim()
-              : KEY_FILENAME
+              : (current.keyFileName || KEY_ENCRYPTED_FILENAME)
           }
 
-          const next = writeSettings({ ...current, ...patch })
+          // Re-read after the async encryption above: a concurrent auto-save
+          // must not be rolled back by a stale snapshot.
+          const latest = readSettings()
+
+          const replacedKeyPath = patch.keyPath && latest.keyPath && latest.keyPath !== patch.keyPath && isInsideDshHome(latest.keyPath)
+            ? latest.keyPath
+            : null
+
+          const next = writeSettings({ ...latest, ...patch })
+
+          if (replacedKeyPath !== null) removeSecretFile(replacedKeyPath)
 
           if (Object.prototype.hasOwnProperty.call(patch, 'gitUserName') || Object.prototype.hasOwnProperty.call(patch, 'gitUserEmail')) {
             await setGitIdentity(next.gitUserName, next.gitUserEmail)
@@ -241,21 +373,78 @@ export function createApiHandler (_ctx: unknown, { trustedHosts }: { trustedHost
           break
         }
 
+        case 'encryptKey': {
+          const current = readSettings()
+
+          if (!current.keyPath || !existsSync(current.keyPath)) {
+            fail(res, 400, 'No private key to encrypt')
+            break
+          }
+
+          if (current.keyEncrypted) {
+            ok(res, { settings: current, status: await statusPayload() })
+            break
+          }
+
+          if (!isInsideDshHome(current.keyPath)) {
+            fail(res, 400, 'Private key is outside the DSH home; upload it again to encrypt.')
+            break
+          }
+
+          const invalid = passphraseError(payload.passphrase)
+
+          if (invalid !== null) {
+            fail(res, 400, invalid)
+            break
+          }
+
+          let pemText: string
+
+          try {
+            pemText = readFileSync(current.keyPath, 'utf8')
+          } catch {
+            fail(res, 400, 'Cannot read private key')
+            break
+          }
+
+          if (!/PRIVATE KEY-----/.test(pemText)) {
+            fail(res, 400, 'Invalid private key format')
+            break
+          }
+
+          let keyPath: string
+
+          try {
+            keyPath = await writeEncryptedKey(pemText, payload.passphrase as string)
+          } catch (error) {
+            fail(res, 500, errorMessage(error, 'Cannot store encrypted private key'))
+            break
+          } finally {
+            pemText = ''
+          }
+
+          const next = writeSettings({ ...readSettings(), keyPath, keyEncrypted: true })
+
+          removeSecretFile(current.keyPath)
+
+          ok(res, { settings: next, status: await statusPayload() })
+          break
+        }
+
         case 'clearConfig': {
           const current = readSettings()
 
-          if (current.keyPath && existsSync(current.keyPath)) {
-            try { unlinkSync(current.keyPath) } catch { /* ignore */ }
-          }
+          removeSecretFile(current.keyPath)
+          removeSecretFile(join(dshHomeDir(), KEY_ENCRYPTED_FILENAME))
 
-          writeSettings({ appId: '', installationId: '', keyPath: null, keyFileName: null })
+          writeSettings({ appId: '', installationId: '', keyPath: null, keyFileName: null, keyEncrypted: false })
           ok(res, await statusPayload())
           break
         }
 
         case 'connect': {
           const settings = readSettings()
-          const result = await connect(settings)
+          const result = await connect(settings, payload.passphrase)
           ok(res, { connect: result, status: await statusPayload() })
           break
         }

@@ -106,6 +106,28 @@ export function isTrustedApiRequest (req: unknown, trustedHosts: string[] = []):
   }
 }
 
+/**
+ * Whether a request targets a loopback authority.
+ *
+ * @param req incoming request carrying a Host header.
+ * @returns true for localhost, ::1 and 127.0.0.0/8 authorities.
+ */
+export function isLoopbackRequest (req: unknown): boolean {
+  if (req === null || typeof req !== 'object') return false
+
+  const headers: Record<string, unknown> = 'headers' in req && req.headers !== null && typeof req.headers === 'object'
+    ? req.headers as Record<string, unknown>
+    : {}
+
+  const host = typeof headers.host === 'string' ? headers.host : undefined
+
+  if (host === undefined) return false
+
+  const authority = parseAuthority(host)
+
+  return authority !== undefined && isLoopbackHostname(authority.hostname)
+}
+
 export function readJsonBody (req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = []

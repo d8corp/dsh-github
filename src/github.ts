@@ -3,6 +3,7 @@ import { createPrivateKey, createSign } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 
 import { DEFAULT_HOSTNAME, TOKEN_TTL_SECONDS } from './constants'
+import { decryptPrivateKey, passphraseError } from './keyCrypto'
 import type { GithubSettings } from './settings'
 import { readSettings, writeSettings } from './settings'
 
@@ -415,7 +416,18 @@ async function fetchInstallationToken (jwt: string, installationId: string, host
   return { ok: true, token: data.token, expiresAt }
 }
 
-export async function connect (settings?: Partial<GithubSettings> | null): Promise<ConnectResult> {
+/**
+ * Exchange the GitHub App private key for an installation token.
+ *
+ * The key file is encrypted at rest, so the passphrase is required on every
+ * call: the decrypted PEM lives only for the duration of this operation and is
+ * never cached in the server process.
+ *
+ * @param settings persisted App ID, installation ID and key location.
+ * @param passphrase passphrase protecting the key file.
+ * @returns the connection outcome and refreshed auth status.
+ */
+export async function connect (settings?: Partial<GithubSettings> | null, passphrase?: unknown): Promise<ConnectResult> {
   const s: Partial<GithubSettings> = settings || {}
   const { appId, installationId, keyPath } = s
 
@@ -423,16 +435,32 @@ export async function connect (settings?: Partial<GithubSettings> | null): Promi
     return { ok: false, error: 'Missing appId, installationId or key file' }
   }
 
+  if (s.keyEncrypted !== true) {
+    return { ok: false, error: 'Private key is stored unencrypted. Encrypt it with a passphrase first.' }
+  }
+
+  const invalidPassphrase = passphraseError(passphrase)
+
+  if (invalidPassphrase !== null) return { ok: false, error: invalidPassphrase }
+
   if (!existsSync(keyPath)) {
     return { ok: false, error: 'Private key file not found' }
+  }
+
+  let envelope: string
+
+  try {
+    envelope = readFileSync(keyPath, 'utf8')
+  } catch (error) {
+    return { ok: false, error: `Cannot read private key: ${error instanceof Error && error.message ? error.message : error}` }
   }
 
   let pem: string
 
   try {
-    pem = readFileSync(keyPath, 'utf8')
-  } catch (error) {
-    return { ok: false, error: `Cannot read private key: ${error instanceof Error && error.message ? error.message : error}` }
+    pem = await decryptPrivateKey(envelope, passphrase as string)
+  } catch {
+    return { ok: false, error: 'Cannot decrypt private key: wrong passphrase or corrupted key file.' }
   }
 
   let jwt: string
@@ -441,6 +469,9 @@ export async function connect (settings?: Partial<GithubSettings> | null): Promi
     jwt = createAppJwt(appId, pem)
   } catch (error) {
     return { ok: false, error: error instanceof Error && error.message ? error.message : 'Failed to create JWT' }
+  } finally {
+    // Drop the plaintext reference as soon as signing is done.
+    pem = ''
   }
 
   const tokenResult = await fetchInstallationToken(jwt, installationId, DEFAULT_HOSTNAME)

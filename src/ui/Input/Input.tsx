@@ -3,7 +3,7 @@ import { getReact } from '../../utils'
 export interface InputProps {
   value: string
   onChange: (value: string) => void
-  type?: 'text' | 'email'
+  type?: 'text' | 'email' | 'password'
   placeholder?: string
   disabled?: boolean
 }

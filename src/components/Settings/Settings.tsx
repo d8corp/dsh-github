@@ -1,6 +1,6 @@
 import type * as ReactTypes from 'react'
 
-import { TOKEN_TTL_SECONDS } from '../../constants'
+import { MIN_PASSPHRASE_CHARS, TOKEN_TTL_SECONDS } from '../../constants'
 import { Button } from '../../ui/Button'
 import { Countdown } from '../../ui/Countdown'
 import { FileInput } from '../../ui/FileInput'
@@ -22,6 +22,7 @@ interface GithubConfigState {
   gitUserEmail: string
   keyFileName: string | null
   hasKey: boolean
+  keyEncrypted: boolean
 }
 
 interface GithubAuthState {
@@ -77,6 +78,13 @@ function readFileAsBase64 (file: File): Promise<string> {
   })
 }
 
+function passphraseProblem (value: string): string | null {
+  if (value.trim() === '') return 'Enter the private key passphrase.'
+  if (value.length < MIN_PASSPHRASE_CHARS) return `Passphrase must be at least ${MIN_PASSPHRASE_CHARS} characters.`
+
+  return null
+}
+
 export function Settings () {
   const React = getReact()
   const { useState, useEffect, useRef } = React
@@ -88,6 +96,7 @@ export function Settings () {
   const [installationId, setInstallationId] = useState('')
   const [gitUserName, setGitUserName] = useState('')
   const [gitUserEmail, setGitUserEmail] = useState('')
+  const [passphrase, setPassphrase] = useState('')
   const loadedRef = useRef(false)
 
   async function refresh (): Promise<void> {
@@ -155,6 +164,15 @@ export function Settings () {
     const file = event.target.files && event.target.files[0]
     if (!file) return
 
+    const problem = passphraseProblem(passphrase)
+
+    if (problem !== null) {
+      setMessage({ kind: 'error', text: problem })
+      event.target.value = ''
+
+      return
+    }
+
     await withBusy(async () => {
       const base64 = await readFileAsBase64(file)
 
@@ -163,23 +181,48 @@ export function Settings () {
         installationId,
         pemBase64: base64,
         pemFileName: file.name,
+        passphrase,
       })
 
-      setMessage({ kind: 'success', text: 'Private key uploaded.' })
+      setMessage({ kind: 'success', text: 'Private key uploaded and encrypted.' })
     })
 
     event.target.value = ''
   }
 
-  async function handleConnect (): Promise<void> {
+  async function handleEncrypt (): Promise<void> {
+    const problem = passphraseProblem(passphrase)
+
+    if (problem !== null) {
+      setMessage({ kind: 'error', text: problem })
+
+      return
+    }
+
     await withBusy(async () => {
-      const result = await callApi('connect') as { connect?: GithubActionResult } | null
+      await callApi('encryptKey', { passphrase })
+      setMessage({ kind: 'success', text: 'Private key encrypted.' })
+    })
+  }
+
+  async function handleConnect (): Promise<void> {
+    const problem = passphraseProblem(passphrase)
+
+    if (problem !== null) {
+      setMessage({ kind: 'error', text: problem })
+
+      return
+    }
+
+    await withBusy(async () => {
+      const result = await callApi('connect', { passphrase }) as { connect?: GithubActionResult } | null
 
       if (result && result.connect && result.connect.ok === false) {
         throw new Error(result.connect.error || 'Connect failed.')
       }
 
       storeIssuedAt(Date.now())
+      setPassphrase('')
       setMessage({ kind: 'success', text: 'Connected.' })
     })
   }
@@ -188,6 +231,7 @@ export function Settings () {
     await withBusy(async () => {
       await callApi('disconnect')
       storeIssuedAt(null)
+      setPassphrase('')
       setMessage({ kind: 'success', text: 'Disconnected.' })
     })
   }
@@ -202,7 +246,7 @@ export function Settings () {
 
   const gh = (status && status.gh) || { installed: false, version: null }
   const git = (status && (status.git || status.gitInfo)) || { installed: false, version: null }
-  const config = (status && status.config) || { hasKey: false, keyFileName: null, appId: '', installationId: '', gitUserName: '', gitUserEmail: '' }
+  const config = (status && status.config) || { hasKey: false, keyEncrypted: false, keyFileName: null, appId: '', installationId: '', gitUserName: '', gitUserEmail: '' }
   const auth = (status && status.auth) || { loggedIn: false, gitConfigured: false }
   const token = status && status.token
 
@@ -245,6 +289,10 @@ export function Settings () {
 
   let connDesc = 'Authenticate GitHub CLI with a GitHub App'
 
+  if (config.hasKey && !config.keyEncrypted) {
+    connDesc += '\nPrivate key is unencrypted: set a passphrase and click Encrypt key.'
+  }
+
   if (!auth.loggedIn && auth.error) {
     connDesc += '\n' + auth.error
   }
@@ -274,7 +322,7 @@ export function Settings () {
   } else {
     connectionControl = (
       <Button
-        disabled={busy || !gh.installed || !git.installed || !config.hasKey || !appId || !installationId}
+        disabled={busy || !gh.installed || !git.installed || !config.hasKey || !config.keyEncrypted || !appId || !installationId}
         onClick={handleConnect}
       >
         {busy ? 'Connecting…' : 'Connect'}
@@ -345,17 +393,46 @@ export function Settings () {
         )}
       />
       <Row
+        key='passphrase'
+        title='Key passphrase'
+        description='Encrypts the private key at rest. It is never stored and is required for upload, encryption and every connect.'
+        control={(
+          <Input
+            type='password'
+            value={passphrase}
+            disabled={busy}
+            onChange={setPassphrase}
+            placeholder={'At least ' + MIN_PASSPHRASE_CHARS + ' characters'}
+          />
+        )}
+      />
+      <Row
         key='key'
         title='Private key (.pem)'
-        description={config.hasKey
-          ? 'Key uploaded' + (config.keyFileName ? ' (' + config.keyFileName + ')' : '')
-          : 'Upload the GitHub App private key'}
+        description={!config.hasKey
+          ? 'Upload the GitHub App private key'
+          : (config.keyEncrypted
+              ? 'Key uploaded and encrypted' + (config.keyFileName ? ' (' + config.keyFileName + ')' : '')
+              : 'Key uploaded without encryption' + (config.keyFileName ? ' (' + config.keyFileName + ')' : '') + ' — set a passphrase and encrypt it')}
         control={(
-          <FileInput
-            accept='.pem'
-            disabled={busy || !gh.installed || !git.installed}
-            onChange={handleUpload}
-          />
+          <>
+            <FileInput
+              accept='.pem'
+              disabled={busy || !gh.installed || !git.installed}
+              onChange={handleUpload}
+            />
+            {config.hasKey && !config.keyEncrypted
+              ? (
+                <Button
+                  variant='secondary'
+                  disabled={busy || !gh.installed || !git.installed}
+                  onClick={handleEncrypt}
+                >
+                  {busy ? 'Encrypting…' : 'Encrypt key'}
+                </Button>
+                )
+              : null}
+          </>
         )}
       />
       <Row

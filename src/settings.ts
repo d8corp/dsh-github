@@ -2,8 +2,8 @@
  * Host-side settings for @d8corp/dsh-github.
  *
  * Stored at `$DSH_HOME/github.json` (or `~/.dsh/github.json`). The private key
- * is never stored here — only its path on the host (the key lives in a
- * separate 0600 file).
+ * is never stored here — only its path on the host. The key itself lives in a
+ * separate 0600 file encrypted with a passphrase that is never persisted.
  */
 
 import { randomBytes } from 'node:crypto'
@@ -29,6 +29,7 @@ export interface GithubSettings {
   gitUserEmail: string
   keyPath: string | null
   keyFileName: string | null
+  keyEncrypted: boolean
   tokenIssuedAt: string | null
   tokenExpiresAt: string | null
 }
@@ -136,6 +137,7 @@ export function normalizeSettings (value: unknown): GithubSettings {
     keyFileName: typeof source.keyFileName === 'string' && source.keyFileName.trim() !== ''
       ? source.keyFileName.trim().slice(0, 255)
       : null,
+    keyEncrypted: source.keyEncrypted === true,
     tokenIssuedAt: normalizeTimestamp(source.tokenIssuedAt),
     tokenExpiresAt: normalizeTimestamp(source.tokenExpiresAt),
   }
@@ -151,6 +153,7 @@ export function mergeSettings (current: unknown, patch: unknown): GithubSettings
   if (Object.prototype.hasOwnProperty.call(patch, 'gitUserEmail')) next.gitUserEmail = patch.gitUserEmail
   if (Object.prototype.hasOwnProperty.call(patch, 'keyPath')) next.keyPath = patch.keyPath
   if (Object.prototype.hasOwnProperty.call(patch, 'keyFileName')) next.keyFileName = patch.keyFileName
+  if (Object.prototype.hasOwnProperty.call(patch, 'keyEncrypted')) next.keyEncrypted = patch.keyEncrypted
   if (Object.prototype.hasOwnProperty.call(patch, 'tokenIssuedAt')) next.tokenIssuedAt = patch.tokenIssuedAt
   if (Object.prototype.hasOwnProperty.call(patch, 'tokenExpiresAt')) next.tokenExpiresAt = patch.tokenExpiresAt
 
