@@ -3,8 +3,12 @@ import { createPrivateKey, createSign } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 
 import { DEFAULT_HOSTNAME, TOKEN_TTL_SECONDS } from './constants'
+import type { GitIdentity, ToolStatus } from './contracts'
+import { decryptPrivateKey } from './keyCrypto'
+import { passphraseError } from './passphrase'
 import type { GithubSettings } from './settings'
 import { readSettings, writeSettings } from './settings'
+import { parseTimestamp } from './time'
 
 export interface RunOptions {
   cwd?: string
@@ -22,11 +26,6 @@ export interface RunResult {
   error: Error | null
 }
 
-export interface ToolInfo {
-  installed: boolean
-  version: string | null
-}
-
 export interface InstallResult {
   ok: boolean
   version?: string | null
@@ -37,11 +36,6 @@ export interface InstallResult {
 export interface InstallGhResult extends InstallResult {
   gh: InstallResult
   git: InstallResult
-}
-
-export interface GitIdentity {
-  name: string
-  email: string
 }
 
 export interface AuthStatus {
@@ -155,26 +149,24 @@ function runGhAuth (args: string[], options: RunOptions = {}): Promise<RunResult
   })
 }
 
-export async function getGhInfo (): Promise<ToolInfo> {
-  const result = await run('gh', ['--version'])
+async function getToolInfo (command: 'gh' | 'git'): Promise<ToolStatus> {
+  const result = await run(command, ['--version'])
+
   if (result.code !== 0) return { installed: false, version: null }
-  const match = result.stdout.match(/gh version (\S+)/) || result.stderr.match(/gh version (\S+)/)
+
+  const pattern = new RegExp(`${command} version (\\S+)`)
+  const match = result.stdout.match(pattern) || result.stderr.match(pattern)
 
   return { installed: true, version: match ? match[1] : result.stdout.trim() || result.stderr.trim() }
 }
 
-export async function getGitInfo (): Promise<ToolInfo> {
-  const result = await run('git', ['--version'])
-  if (result.code !== 0) return { installed: false, version: null }
-  const match = result.stdout.match(/git version (\S+)/) || result.stderr.match(/git version (\S+)/)
-
-  return { installed: true, version: match ? match[1] : result.stdout.trim() || result.stderr.trim() }
+export function getGhInfo (): Promise<ToolStatus> {
+  return getToolInfo('gh')
 }
 
-export const getGitVersion = getGitInfo
-export const getGitCliInfo = getGitInfo
-export const getGitCliVersion = getGitInfo
-export const getGitInfoVersion = getGitInfo
+export function getGitInfo (): Promise<ToolStatus> {
+  return getToolInfo('git')
+}
 
 const AUTH_FAILURE_TEXT = /failed to log in|not logged in(to)?|is invalid|has expired|authentication failed|bad credentials|re-?authenticate/i
 const AUTH_SUCCESS_TEXT = /logged in to|logged in as/i
@@ -261,57 +253,39 @@ export async function getAuthStatus (hostname = DEFAULT_HOSTNAME): Promise<AuthS
   }
 }
 
-export async function installGit (): Promise<InstallResult> {
-  const info = await getGitInfo()
-  if (info.installed) return { ok: true, version: info.version, skipped: true }
+async function aptInstall (name: 'gh' | 'git'): Promise<InstallResult> {
   const update = await run('apt-get', ['update'], { timeout: 300000 })
 
   if (update.code !== 0) {
     return { ok: false, error: (update.stderr || update.stdout || 'apt-get update failed').trim() }
   }
 
-  const install = await run('apt-get', ['install', '-y', 'git'], { timeout: 300000 })
+  const install = await run('apt-get', ['install', '-y', name], { timeout: 300000 })
 
   if (install.code !== 0) {
-    return { ok: false, error: (install.stderr || install.stdout || 'apt-get install git failed').trim() }
+    return { ok: false, error: (install.stderr || install.stdout || `apt-get install ${name} failed`).trim() }
   }
 
-  const after = await getGitInfo()
+  const after = name === 'gh' ? await getGhInfo() : await getGitInfo()
 
-  return { ok: after.installed, version: after.version, error: after.installed ? undefined : 'git still not found after install' }
+  return { ok: after.installed, version: after.version, error: after.installed ? undefined : `${name} still not found after install` }
 }
 
-export const installGitCli = installGit
-export const installGitVersion = installGit
-export const installGitTool = installGit
+export async function installGit (): Promise<InstallResult> {
+  const info = await getGitInfo()
+  if (info.installed) return { ok: true, version: info.version, skipped: true }
+
+  return aptInstall('git')
+}
 
 export async function installGh (): Promise<InstallGhResult> {
-  // Install GitHub CLI if missing.
   const ghBefore = await getGhInfo()
-  let ghResult: InstallResult
 
-  if (ghBefore.installed) {
-    ghResult = { ok: true, version: ghBefore.version, skipped: true }
-  } else {
-    const update = await run('apt-get', ['update'], { timeout: 300000 })
+  const ghResult: InstallResult = ghBefore.installed
+    ? { ok: true, version: ghBefore.version, skipped: true }
+    : await aptInstall('gh')
 
-    if (update.code !== 0) {
-      ghResult = { ok: false, error: (update.stderr || update.stdout || 'apt-get update failed').trim() }
-    } else {
-      const install = await run('apt-get', ['install', '-y', 'gh'], { timeout: 300000 })
-
-      if (install.code !== 0) {
-        ghResult = { ok: false, error: (install.stderr || install.stdout || 'apt-get install gh failed').trim() }
-      } else {
-        const after = await getGhInfo()
-        ghResult = { ok: after.installed, version: after.version, error: after.installed ? undefined : 'gh still not found after install' }
-      }
-    }
-  }
-
-  // Install Git CLI if missing.
   const gitResult = await installGit()
-
   const ok = ghResult.ok && gitResult.ok
 
   return {
@@ -322,12 +296,6 @@ export async function installGh (): Promise<InstallGhResult> {
     error: ok ? undefined : (ghResult.error || gitResult.error),
   }
 }
-
-// Combined installer (alias).
-export const install = installGh
-export const installMissing = installGh
-export const installCli = installGh
-export const installTools = installGh
 
 function base64UrlEncode (value: Buffer | string): string {
   const buf = Buffer.isBuffer(value) ? value : Buffer.from(String(value), 'utf8')
@@ -358,19 +326,6 @@ function createAppJwt (appId: string, privateKeyPem: string): string {
 
 function apiBaseFor (hostname: string): string {
   return hostname === 'github.com' ? 'https://api.github.com' : `https://${hostname}/api/v3`
-}
-
-/**
- * Parse the GitHub API `expires_at` field (ISO-8601) into epoch milliseconds.
- *
- * @param value raw `expires_at` field of the access-token response.
- * @returns epoch milliseconds, or null when missing or unparsable.
- */
-function parseTokenExpiry (value: unknown): number | null {
-  if (typeof value !== 'string' || value.trim() === '') return null
-  const ms = Date.parse(value)
-
-  return Number.isFinite(ms) ? ms : null
 }
 
 async function fetchInstallationToken (jwt: string, installationId: string, hostname: string): Promise<TokenResult> {
@@ -410,12 +365,25 @@ async function fetchInstallationToken (jwt: string, installationId: string, host
     return { ok: false, error: 'No installation token in GitHub API response' }
   }
 
-  const expiresAt = parseTokenExpiry((data as { expires_at?: unknown }).expires_at)
+  // The API field is documented as a string; anything else is treated as absent.
+  const rawExpiresAt = (data as { expires_at?: unknown }).expires_at
+  const expiresAt = typeof rawExpiresAt === 'string' ? parseTimestamp(rawExpiresAt) : null
 
   return { ok: true, token: data.token, expiresAt }
 }
 
-export async function connect (settings?: Partial<GithubSettings> | null): Promise<ConnectResult> {
+/**
+ * Exchange the GitHub App private key for an installation token.
+ *
+ * The key file is encrypted at rest, so the passphrase is required on every
+ * call: the decrypted PEM lives only for the duration of this operation and is
+ * never cached in the server process.
+ *
+ * @param settings persisted App ID, installation ID and key location.
+ * @param passphrase passphrase protecting the key file.
+ * @returns the connection outcome and refreshed auth status.
+ */
+export async function connect (settings?: Partial<GithubSettings> | null, passphrase?: unknown): Promise<ConnectResult> {
   const s: Partial<GithubSettings> = settings || {}
   const { appId, installationId, keyPath } = s
 
@@ -423,16 +391,32 @@ export async function connect (settings?: Partial<GithubSettings> | null): Promi
     return { ok: false, error: 'Missing appId, installationId or key file' }
   }
 
+  if (s.keyEncrypted !== true) {
+    return { ok: false, error: 'Private key is stored unencrypted. Encrypt it with a passphrase first.' }
+  }
+
+  const invalidPassphrase = passphraseError(passphrase)
+
+  if (invalidPassphrase !== null) return { ok: false, error: invalidPassphrase }
+
   if (!existsSync(keyPath)) {
     return { ok: false, error: 'Private key file not found' }
+  }
+
+  let envelope: string
+
+  try {
+    envelope = readFileSync(keyPath, 'utf8')
+  } catch (error) {
+    return { ok: false, error: `Cannot read private key: ${error instanceof Error && error.message ? error.message : error}` }
   }
 
   let pem: string
 
   try {
-    pem = readFileSync(keyPath, 'utf8')
-  } catch (error) {
-    return { ok: false, error: `Cannot read private key: ${error instanceof Error && error.message ? error.message : error}` }
+    pem = await decryptPrivateKey(envelope, passphrase as string)
+  } catch {
+    return { ok: false, error: 'Cannot decrypt private key: wrong passphrase or corrupted key file.' }
   }
 
   let jwt: string
@@ -441,6 +425,9 @@ export async function connect (settings?: Partial<GithubSettings> | null): Promi
     jwt = createAppJwt(appId, pem)
   } catch (error) {
     return { ok: false, error: error instanceof Error && error.message ? error.message : 'Failed to create JWT' }
+  } finally {
+    // Drop the plaintext reference as soon as signing is done.
+    pem = ''
   }
 
   const tokenResult = await fetchInstallationToken(jwt, installationId, DEFAULT_HOSTNAME)

@@ -1,6 +1,8 @@
 import type * as ReactTypes from 'react'
 
-import { TOKEN_TTL_SECONDS } from '../../constants'
+import { MIN_PASSPHRASE_CHARS, TOKEN_TTL_SECONDS } from '../../constants'
+import type { StatusAuth, StatusConfig, StatusPayload, ToolStatus } from '../../contracts'
+import { passphraseError } from '../../passphrase'
 import { Button } from '../../ui/Button'
 import { Countdown } from '../../ui/Countdown'
 import { FileInput } from '../../ui/FileInput'
@@ -8,49 +10,7 @@ import { Input } from '../../ui/Input'
 import { Notice } from '../../ui/Notice'
 import { Row } from '../../ui/Raw'
 import { Status } from '../../ui/Status'
-import { callApi, errorMessage, getReact, readStoredIssuedAt, resolveTokenExpiry, storeIssuedAt } from '../../utils'
-
-interface GithubToolState {
-  installed: boolean
-  version: string | null
-}
-
-interface GithubConfigState {
-  appId: string
-  installationId: string
-  gitUserName: string
-  gitUserEmail: string
-  keyFileName: string | null
-  hasKey: boolean
-}
-
-interface GithubAuthState {
-  loggedIn: boolean
-  gitConfigured: boolean
-  error?: string
-}
-
-interface GithubIdentityState {
-  name: string
-  email: string
-}
-
-interface GithubTokenState {
-  issuedAt: number | null
-  expiresAt: number | null
-  ttlSeconds: number
-  active: boolean
-}
-
-interface GithubStatus {
-  gh: GithubToolState
-  git: GithubToolState
-  gitInfo?: GithubToolState
-  config: GithubConfigState
-  auth: GithubAuthState
-  gitIdentity: GithubIdentityState
-  token?: GithubTokenState
-}
+import { callApi, errorMessage, getReact, resolveTokenExpiry } from '../../utils'
 
 interface GithubActionResult {
   ok?: boolean
@@ -83,16 +43,17 @@ export function Settings () {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<GithubMessage | null>(null)
-  const [status, setStatus] = useState<GithubStatus | null>(null)
+  const [status, setStatus] = useState<StatusPayload | null>(null)
   const [appId, setAppId] = useState('')
   const [installationId, setInstallationId] = useState('')
   const [gitUserName, setGitUserName] = useState('')
   const [gitUserEmail, setGitUserEmail] = useState('')
+  const [passphrase, setPassphrase] = useState('')
   const loadedRef = useRef(false)
 
   async function refresh (): Promise<void> {
     try {
-      const value = await callApi('status') as GithubStatus | null
+      const value = await callApi('status') as StatusPayload | null
       setStatus(value)
       setAppId((value && value.config && value.config.appId) || '')
       setInstallationId((value && value.config && value.config.installationId) || '')
@@ -151,9 +112,25 @@ export function Settings () {
     })
   }
 
+  function requirePassphrase (): boolean {
+    const problem = passphraseError(passphrase)
+
+    if (problem === null) return true
+
+    setMessage({ kind: 'error', text: problem })
+
+    return false
+  }
+
   async function handleUpload (event: ReactTypes.ChangeEvent<HTMLInputElement>): Promise<void> {
     const file = event.target.files && event.target.files[0]
     if (!file) return
+
+    if (!requirePassphrase()) {
+      event.target.value = ''
+
+      return
+    }
 
     await withBusy(async () => {
       const base64 = await readFileAsBase64(file)
@@ -163,23 +140,35 @@ export function Settings () {
         installationId,
         pemBase64: base64,
         pemFileName: file.name,
+        passphrase,
       })
 
-      setMessage({ kind: 'success', text: 'Private key uploaded.' })
+      setMessage({ kind: 'success', text: 'Private key uploaded and encrypted.' })
     })
 
     event.target.value = ''
   }
 
-  async function handleConnect (): Promise<void> {
+  async function handleEncrypt (): Promise<void> {
+    if (!requirePassphrase()) return
+
     await withBusy(async () => {
-      const result = await callApi('connect') as { connect?: GithubActionResult } | null
+      await callApi('encryptKey', { passphrase })
+      setMessage({ kind: 'success', text: 'Private key encrypted.' })
+    })
+  }
+
+  async function handleConnect (): Promise<void> {
+    if (!requirePassphrase()) return
+
+    await withBusy(async () => {
+      const result = await callApi('connect', { passphrase }) as { connect?: GithubActionResult } | null
 
       if (result && result.connect && result.connect.ok === false) {
         throw new Error(result.connect.error || 'Connect failed.')
       }
 
-      storeIssuedAt(Date.now())
+      setPassphrase('')
       setMessage({ kind: 'success', text: 'Connected.' })
     })
   }
@@ -187,7 +176,7 @@ export function Settings () {
   async function handleDisconnect (): Promise<void> {
     await withBusy(async () => {
       await callApi('disconnect')
-      storeIssuedAt(null)
+      setPassphrase('')
       setMessage({ kind: 'success', text: 'Disconnected.' })
     })
   }
@@ -200,33 +189,31 @@ export function Settings () {
     )
   }
 
-  const gh = (status && status.gh) || { installed: false, version: null }
-  const git = (status && (status.git || status.gitInfo)) || { installed: false, version: null }
-  const config = (status && status.config) || { hasKey: false, keyFileName: null, appId: '', installationId: '', gitUserName: '', gitUserEmail: '' }
-  const auth = (status && status.auth) || { loggedIn: false, gitConfigured: false }
-  const token = status && status.token
+  const gh: ToolStatus = status?.gh ?? { installed: false, version: null }
+  const git: ToolStatus = status?.git ?? { installed: false, version: null }
+  const config: StatusConfig = status?.config ?? { hasKey: false, keyEncrypted: false, keyFileName: null, appId: '', installationId: '', gitUserName: '', gitUserEmail: '' }
+  const auth: StatusAuth = status?.auth ?? { loggedIn: false, gitConfigured: false }
+  const token = status?.token ?? null
+  const toolsReady = gh.installed && git.installed
+  const formDisabled = busy || !toolsReady
+  const gitFieldsDisabled = busy || !git.installed
 
-  const ttlSeconds = token && typeof token.ttlSeconds === 'number' && Number.isFinite(token.ttlSeconds)
+  const ttlSeconds = token !== null && Number.isFinite(token.ttlSeconds)
     ? token.ttlSeconds
     : TOKEN_TTL_SECONDS
 
-  const hostExpiresAt = token && typeof token.expiresAt === 'number' ? token.expiresAt : null
+  const hostIssuedAt = token !== null && Number.isFinite(token.issuedAt) ? token.issuedAt : null
+  const hostExpiresAt = token !== null && Number.isFinite(token.expiresAt) ? token.expiresAt : null
 
   const tokenExpiresAt = auth.loggedIn
-    ? resolveTokenExpiry(hostExpiresAt, readStoredIssuedAt(), ttlSeconds * 1000)
+    ? resolveTokenExpiry(hostExpiresAt, hostIssuedAt, ttlSeconds * 1000)
     : null
-
-  // The countdown belongs to the Connection section: it shows the remaining
-  // lifetime of the installation token issued by the current connection.
-  function handleTokenExpired (): void {
-    refresh()
-  }
 
   // CLI status
   let cliStateLabel = 'Ready'
   let cliStateClass = 'connected'
 
-  if (!gh.installed || !git.installed) {
+  if (!toolsReady) {
     cliStateLabel = 'Install required'
     cliStateClass = 'missing'
   }
@@ -245,13 +232,17 @@ export function Settings () {
 
   let connDesc = 'Authenticate GitHub CLI with a GitHub App'
 
+  if (config.hasKey && !config.keyEncrypted) {
+    connDesc += '\nPrivate key is unencrypted: set a passphrase and click Encrypt key.'
+  }
+
   if (!auth.loggedIn && auth.error) {
     connDesc += '\n' + auth.error
   }
 
   let installControl: ReactTypes.ReactNode = null
 
-  if (!gh.installed || !git.installed) {
+  if (!toolsReady) {
     installControl = (
       <Button disabled={busy} onClick={handleInstall}>
         {busy ? 'Installing…' : 'Install missing components'}
@@ -274,7 +265,7 @@ export function Settings () {
   } else {
     connectionControl = (
       <Button
-        disabled={busy || !gh.installed || !git.installed || !config.hasKey || !appId || !installationId}
+        disabled={formDisabled || !config.hasKey || !config.keyEncrypted || !appId || !installationId}
         onClick={handleConnect}
       >
         {busy ? 'Connecting…' : 'Connect'}
@@ -298,7 +289,7 @@ export function Settings () {
         control={(
           <Input
             value={appId}
-            disabled={busy || !gh.installed || !git.installed}
+            disabled={formDisabled}
             onChange={setAppId}
             placeholder='123456'
           />
@@ -311,7 +302,7 @@ export function Settings () {
         control={(
           <Input
             value={installationId}
-            disabled={busy || !gh.installed || !git.installed}
+            disabled={formDisabled}
             onChange={setInstallationId}
             placeholder='12345678'
           />
@@ -324,7 +315,7 @@ export function Settings () {
         control={(
           <Input
             value={gitUserName}
-            disabled={busy || !git.installed}
+            disabled={gitFieldsDisabled}
             onChange={setGitUserName}
             placeholder='Your Name'
           />
@@ -338,24 +329,53 @@ export function Settings () {
           <Input
             type='email'
             value={gitUserEmail}
-            disabled={busy || !git.installed}
+            disabled={gitFieldsDisabled}
             onChange={setGitUserEmail}
             placeholder='you@example.com'
           />
         )}
       />
       <Row
+        key='passphrase'
+        title='Key passphrase'
+        description='Encrypts the private key at rest. It is never stored and is required for upload, encryption and every connect.'
+        control={(
+          <Input
+            type='password'
+            value={passphrase}
+            disabled={busy}
+            onChange={setPassphrase}
+            placeholder={'At least ' + MIN_PASSPHRASE_CHARS + ' characters'}
+          />
+        )}
+      />
+      <Row
         key='key'
         title='Private key (.pem)'
-        description={config.hasKey
-          ? 'Key uploaded' + (config.keyFileName ? ' (' + config.keyFileName + ')' : '')
-          : 'Upload the GitHub App private key'}
+        description={!config.hasKey
+          ? 'Upload the GitHub App private key'
+          : (config.keyEncrypted
+              ? 'Key uploaded and encrypted' + (config.keyFileName ? ' (' + config.keyFileName + ')' : '')
+              : 'Key uploaded without encryption' + (config.keyFileName ? ' (' + config.keyFileName + ')' : '') + ' — set a passphrase and encrypt it')}
         control={(
-          <FileInput
-            accept='.pem'
-            disabled={busy || !gh.installed || !git.installed}
-            onChange={handleUpload}
-          />
+          <>
+            <FileInput
+              accept='.pem'
+              disabled={formDisabled}
+              onChange={handleUpload}
+            />
+            {config.hasKey && !config.keyEncrypted
+              ? (
+                <Button
+                  variant='secondary'
+                  disabled={formDisabled}
+                  onClick={handleEncrypt}
+                >
+                  {busy ? 'Encrypting…' : 'Encrypt key'}
+                </Button>
+                )
+              : null}
+          </>
         )}
       />
       <Row
@@ -365,7 +385,7 @@ export function Settings () {
         badge={<Status state={connStateClass} label={connStateLabel} />}
         control={(
           <>
-            <Countdown expiresAt={tokenExpiresAt} onExpired={handleTokenExpired} />
+            <Countdown expiresAt={tokenExpiresAt} onExpired={refresh} />
             {connectionControl}
           </>
         )}

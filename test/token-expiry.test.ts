@@ -2,7 +2,7 @@
  * @jest-environment node
  */
 import { generateKeyPairSync } from 'node:crypto'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,7 +11,8 @@ import { Readable } from 'node:stream'
 import { createApiHandler } from '../src/api'
 import { TOKEN_TTL_SECONDS } from '../src/constants'
 import { connect, disconnect, getAuthStatus } from '../src/github'
-import { mergeSettings, normalizeSettings, readSettings, writeSettings } from '../src/settings'
+import { decryptPrivateKey, encryptPrivateKey } from '../src/keyCrypto'
+import { normalizeSettings, readSettings, writeSettings } from '../src/settings'
 
 const isWindows = process.platform === 'win32'
 const testUnlessWindows = isWindows ? test.skip : test
@@ -20,6 +21,8 @@ const testUnlessWindows = isWindows ? test.skip : test
 const PRIVATE_KEY_PEM = generateKeyPairSync('rsa', { modulusLength: 2048 })
   .privateKey
   .export({ type: 'pkcs1', format: 'pem' }) as string
+
+const PASSPHRASE = 'test-key-passphrase'
 
 // `gh auth status` fixture: a healthy, active account.
 const LOGGED_IN_STATUS = [
@@ -183,9 +186,9 @@ interface TokenEnv {
 async function withTokenEnv<T> (fn: (env: TokenEnv) => Promise<T>): Promise<T> {
   const root = mkdtempSync(join(tmpdir(), 'dsh-token-expiry-'))
   const home = join(root, 'home')
-  const keyPath = join(root, 'github-app.pem')
-  mkdirSync(home, { recursive: true })
-  writeFileSync(keyPath, PRIVATE_KEY_PEM, { mode: 0o600 })
+  const keyPath = join(home, 'dsh-github', 'github-app.pem.enc')
+  mkdirSync(join(home, 'dsh-github'), { recursive: true })
+  writeFileSync(keyPath, await encryptPrivateKey(PRIVATE_KEY_PEM, PASSPHRASE), { mode: 0o600 })
 
   const previousHome = process.env.DSH_HOME
   process.env.DSH_HOME = home
@@ -205,7 +208,7 @@ describe('connect token lifetime', () => {
       stubFetch({ token: 'ghs_installation_token', expires_at: API_EXPIRES_ISO })
 
       const before = Date.now()
-      const result = await connect({ appId: '123', installationId: '456', keyPath })
+      const result = await connect({ appId: '123', installationId: '456', keyPath, keyEncrypted: true }, PASSPHRASE)
       const after = Date.now()
 
       expect(result.ok).toBe(true)
@@ -232,7 +235,7 @@ describe('connect token lifetime', () => {
         stubFetch(body)
 
         const before = Date.now() + TOKEN_TTL_SECONDS * 1000
-        const result = await connect({ appId: '123', installationId: '456', keyPath })
+        const result = await connect({ appId: '123', installationId: '456', keyPath, keyEncrypted: true }, PASSPHRASE)
         const after = Date.now() + TOKEN_TTL_SECONDS * 1000
 
         expect(result.ok).toBe(true)
@@ -253,11 +256,122 @@ describe('connect token lifetime', () => {
     await withStubGh(ghStub(1), () => withTokenEnv(async ({ keyPath }) => {
       stubFetch({ token: 'ghs_installation_token', expires_at: API_EXPIRES_ISO })
 
-      const result = await connect({ appId: '123', installationId: '456', keyPath })
+      const result = await connect({ appId: '123', installationId: '456', keyPath, keyEncrypted: true }, PASSPHRASE)
 
       expect(result.ok).toBe(false)
       expect(readSettings().tokenExpiresAt).toBeNull()
       expect(readSettings().tokenIssuedAt).toBeNull()
+    }))
+  })
+})
+
+describe('private key protection', () => {
+  testUnlessWindows('connect refuses a key stored without encryption', async () => {
+    await withTokenEnv(async ({ home }) => {
+      const legacyPath = join(home, 'legacy.pem')
+      writeFileSync(legacyPath, PRIVATE_KEY_PEM, { mode: 0o600 })
+      const fetchMock = stubFetch({ token: 'ghs_installation_token' })
+
+      const result = await connect({
+        appId: '123',
+        installationId: '456',
+        keyPath: legacyPath,
+        keyEncrypted: false,
+      }, PASSPHRASE)
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/unencrypted/i)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
+
+  testUnlessWindows('connect refuses a wrong or missing passphrase before calling GitHub', async () => {
+    await withTokenEnv(async ({ keyPath }) => {
+      const fetchMock = stubFetch({ token: 'ghs_installation_token' })
+      const settings = {
+        appId: '123',
+        installationId: '456',
+        keyPath,
+        keyEncrypted: true,
+      }
+
+      const wrong = await connect(settings, 'wrong-passphrase')
+      const missing = await connect(settings)
+
+      expect(wrong.ok).toBe(false)
+      expect(wrong.error).toMatch(/decrypt/i)
+      expect(missing.ok).toBe(false)
+      expect(missing.error).toMatch(/passphrase/i)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
+
+  testUnlessWindows('rejects a key upload without a passphrase and leaves the stored key untouched', async () => {
+    await withTokenEnv(async ({ home }) => {
+      const keyPath = join(home, 'dsh-github', 'github-app.pem.enc')
+      const before = readFileSync(keyPath, 'utf8')
+
+      const response = await postApi({
+        action: 'saveConfig',
+        pemBase64: Buffer.from(PRIVATE_KEY_PEM, 'utf8').toString('base64'),
+        pemFileName: 'uploaded.pem',
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(JSON.parse(response.body).error.message).toMatch(/passphrase/i)
+      expect(readFileSync(keyPath, 'utf8')).toBe(before)
+    })
+  })
+
+  testUnlessWindows('saveConfig encrypts an uploaded key and removes the legacy plaintext', async () => {
+    await withStubGh(ghStub(), () => withTokenEnv(async ({ home }) => {
+      const legacyPath = join(home, 'legacy.pem')
+      writeFileSync(legacyPath, PRIVATE_KEY_PEM, { mode: 0o600 })
+      writeSettings({ appId: '123', installationId: '456', keyPath: legacyPath, keyEncrypted: false })
+
+      const response = await postApi({
+        action: 'saveConfig',
+        appId: '123',
+        installationId: '456',
+        pemBase64: Buffer.from(PRIVATE_KEY_PEM, 'utf8').toString('base64'),
+        pemFileName: 'uploaded.pem',
+        passphrase: PASSPHRASE,
+      })
+
+      expect(response.statusCode).toBe(200)
+
+      const settings = JSON.parse(response.body).value.settings
+      const encryptedPath = settings.keyPath as string
+
+      expect(settings.keyEncrypted).toBe(true)
+      expect(encryptedPath.endsWith('github-app.pem.enc')).toBe(true)
+      expect(existsSync(legacyPath)).toBe(false)
+      expect(existsSync(encryptedPath)).toBe(true)
+
+      const encryptedText = readFileSync(encryptedPath, 'utf8')
+      expect(encryptedText).not.toContain('PRIVATE KEY')
+      expect(await decryptPrivateKey(encryptedText, PASSPHRASE)).toBe(PRIVATE_KEY_PEM)
+      expect(statSync(encryptedPath).mode & 0o777).toBe(0o600)
+    }))
+  })
+
+  testUnlessWindows('encryptKey migrates a legacy plaintext key in place', async () => {
+    await withStubGh(ghStub(), () => withTokenEnv(async ({ home }) => {
+      const legacyPath = join(home, 'legacy.pem')
+      writeFileSync(legacyPath, PRIVATE_KEY_PEM, { mode: 0o600 })
+      writeSettings({ appId: '123', installationId: '456', keyPath: legacyPath, keyEncrypted: false })
+
+      const response = await postApi({ action: 'encryptKey', passphrase: PASSPHRASE })
+
+      expect(response.statusCode).toBe(200)
+
+      const settings = JSON.parse(response.body).value.settings
+      expect(settings.keyEncrypted).toBe(true)
+      expect(settings.keyPath.endsWith('github-app.pem.enc')).toBe(true)
+      expect(existsSync(legacyPath)).toBe(false)
+
+      const encryptedText = readFileSync(settings.keyPath, 'utf8')
+      expect(await decryptPrivateKey(encryptedText, PASSPHRASE)).toBe(PRIVATE_KEY_PEM)
     }))
   })
 })
@@ -269,6 +383,7 @@ describe('disconnect', () => {
         appId: '123',
         installationId: '456',
         keyPath,
+        keyEncrypted: true,
         tokenIssuedAt: API_ISSUED_ISO,
         tokenExpiresAt: API_EXPIRES_ISO,
       })
@@ -282,8 +397,9 @@ describe('disconnect', () => {
       expect(settings.tokenExpiresAt).toBeNull()
       expect(settings.appId).toBe('123')
       expect(settings.keyPath).toBe(keyPath)
+      expect(settings.keyEncrypted).toBe(true)
 
-      const onDisk = JSON.parse(readFileSync(join(home, 'github.json'), 'utf8'))
+      const onDisk = JSON.parse(readFileSync(join(home, 'dsh-github', 'github.json'), 'utf8'))
       expect(onDisk.tokenIssuedAt).toBeNull()
       expect(onDisk.tokenExpiresAt).toBeNull()
     }))
@@ -304,7 +420,7 @@ describe('token environment vs auth commands', () => {
 
       stubFetch({ token: FRESH_TOKEN, expires_at: API_EXPIRES_ISO })
 
-      const result = await connect({ appId: '123', installationId: '456', keyPath })
+      const result = await connect({ appId: '123', installationId: '456', keyPath, keyEncrypted: true }, PASSPHRASE)
 
       expect(result.ok).toBe(true)
       expect(result.error).toBeUndefined()
@@ -323,7 +439,7 @@ describe('token environment vs auth commands', () => {
 
       stubFetch({ token: FRESH_TOKEN })
 
-      const result = await connect({ appId: '123', installationId: '456', keyPath })
+      const result = await connect({ appId: '123', installationId: '456', keyPath, keyEncrypted: true }, PASSPHRASE)
 
       expect(result.ok).toBe(true)
       expect(process.env.GH_ENTERPRISE_TOKEN).toBe(STALE_TOKEN)
@@ -382,17 +498,10 @@ describe('normalizeSettings token lifetime', () => {
     expect(normalizeSettings({ tokenExpiresAt: '2026-01-02' }).tokenExpiresAt).toBe('2026-01-02T00:00:00.000Z')
   })
 
-  test('mergeSettings allowlists both keys and normalizes the patch', () => {
-    const merged = mergeSettings(
-      { appId: '7', tokenIssuedAt: API_ISSUED_ISO },
-      { installationId: '8', tokenExpiresAt: API_EXPIRES_MS },
-    )
-
-    expect(merged.appId).toBe('7')
-    expect(merged.installationId).toBe('8')
-    expect(merged.tokenIssuedAt).toBe(API_ISSUED_ISO)
-    expect(merged.tokenExpiresAt).toBe(API_EXPIRES_ISO)
-    expect(mergeSettings({ tokenExpiresAt: API_EXPIRES_ISO }, { tokenExpiresAt: 'garbage' }).tokenExpiresAt).toBeNull()
+  test('keyEncrypted is strictly boolean', () => {
+    expect(normalizeSettings({}).keyEncrypted).toBe(false)
+    expect(normalizeSettings({ keyEncrypted: 'true' }).keyEncrypted).toBe(false)
+    expect(normalizeSettings({ keyEncrypted: true }).keyEncrypted).toBe(true)
   })
 })
 
@@ -443,6 +552,7 @@ describe('statusPayload token', () => {
         appId: '123',
         installationId: '456',
         keyPath,
+        keyEncrypted: true,
         tokenIssuedAt: API_ISSUED_ISO,
         tokenExpiresAt: API_EXPIRES_ISO,
       })
@@ -487,6 +597,7 @@ describe('statusPayload token', () => {
         appId: '123',
         installationId: '456',
         keyPath,
+        keyEncrypted: true,
         tokenIssuedAt: API_ISSUED_ISO,
         tokenExpiresAt: API_EXPIRES_ISO,
       })
