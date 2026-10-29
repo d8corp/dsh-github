@@ -8,7 +8,7 @@ import { Input } from '../../ui/Input'
 import { Notice } from '../../ui/Notice'
 import { Row } from '../../ui/Raw'
 import { Status } from '../../ui/Status'
-import { callApi, errorMessage, getReact, readStoredIssuedAt, resolveTokenExpiry, storeIssuedAt } from '../../utils'
+import { callApi, errorMessage, getReact, resolveTokenExpiry } from '../../utils'
 
 interface GithubToolState {
   installed: boolean
@@ -221,7 +221,6 @@ export function Settings () {
         throw new Error(result.connect.error || 'Connect failed.')
       }
 
-      storeIssuedAt(Date.now())
       setPassphrase('')
       setMessage({ kind: 'success', text: 'Connected.' })
     })
@@ -230,7 +229,6 @@ export function Settings () {
   async function handleDisconnect (): Promise<void> {
     await withBusy(async () => {
       await callApi('disconnect')
-      storeIssuedAt(null)
       setPassphrase('')
       setMessage({ kind: 'success', text: 'Disconnected.' })
     })
@@ -254,10 +252,11 @@ export function Settings () {
     ? token.ttlSeconds
     : TOKEN_TTL_SECONDS
 
+  const hostIssuedAt = token && typeof token.issuedAt === 'number' ? token.issuedAt : null
   const hostExpiresAt = token && typeof token.expiresAt === 'number' ? token.expiresAt : null
 
   const tokenExpiresAt = auth.loggedIn
-    ? resolveTokenExpiry(hostExpiresAt, readStoredIssuedAt(), ttlSeconds * 1000)
+    ? resolveTokenExpiry(hostExpiresAt, hostIssuedAt, ttlSeconds * 1000)
     : null
 
   // The countdown belongs to the Connection section: it shows the remaining

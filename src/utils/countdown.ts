@@ -41,8 +41,8 @@ export function tokenLevel (remainingMs: number | null | undefined): TokenLevel 
 }
 
 /**
- * Picks the expiry instant to count down to: the host-provided one wins,
- * otherwise the locally recorded issue time plus the known TTL.
+ * Picks the expiry instant to count down to: the host-provided expiry wins,
+ * otherwise the host-recorded issue time plus the known TTL.
  */
 export function resolveTokenExpiry (
   hostExpiresAt: number | null | undefined,
