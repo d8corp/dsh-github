@@ -10,22 +10,11 @@
  * the plugin directory once by `migrateLegacyLayout()`.
  */
 
-import { randomBytes } from 'node:crypto'
-import {
-  chmodSync,
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 
+import { writeSecretFile } from './atomicFile'
 import { KEY_ENCRYPTED_FILENAME, KEY_FILENAME, PLUGIN_DIR_NAME, SETTINGS_FILENAME } from './constants'
 
 export interface GithubSettings {
@@ -206,37 +195,8 @@ export function readSettings (file = defaultSettingsFile()): GithubSettings {
 
 export function writeSettings (settings: unknown, file = settingsPath()): GithubSettings {
   const normalized = normalizeSettings(settings)
-  const directory = dirname(file)
-  mkdirSync(directory, { recursive: true, mode: 0o700 })
 
-  const temp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
-  const payload = `${JSON.stringify(normalized, null, 2)}\n`
-
-  let handle: number | undefined
-
-  try {
-    handle = openSync(temp, 'w', 0o600)
-    writeFileSync(handle, payload, 'utf8')
-    fsyncSync(handle)
-    closeSync(handle)
-    handle = undefined
-  } catch (error) {
-    if (handle !== undefined) {
-      try { closeSync(handle) } catch { /* already closed */ }
-    }
-
-    try { unlinkSync(temp) } catch { /* nothing to clean up */ }
-    throw error
-  }
-
-  try {
-    renameSync(temp, file)
-  } catch (error) {
-    try { unlinkSync(temp) } catch { /* nothing to clean up */ }
-    throw error
-  }
-
-  try { chmodSync(file, 0o600) } catch { /* non-POSIX filesystem */ }
+  writeSecretFile(file, `${JSON.stringify(normalized, null, 2)}\n`)
 
   return normalized
 }

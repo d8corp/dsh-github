@@ -39,14 +39,6 @@
     "lint": "eslint src --ext .ts,.tsx",
     "lint:fix": "eslint src --ext .ts,.tsx --fix"
   },
-  "peerDependencies": {
-    "@deepseek-ai/dsh-credentials": ">=0.2.0-rc.0"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-credentials": {
-      "optional": true
-    }
-  },
   "dsh": {
     "manifestVersion": "1",
     "bundle": {

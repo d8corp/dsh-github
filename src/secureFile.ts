@@ -1,66 +1,22 @@
 /**
  * Private-file helpers for the GitHub App key.
  *
- * Writes are atomic (temp file + fsync + rename) and always end up with mode
- * 0600, including when the destination already existed with looser bits.
  * Deletions are restricted to the harness home so a tampered settings file
  * cannot turn `clearConfig` into arbitrary file removal.
  */
 
-import { randomBytes } from 'node:crypto'
-import {
-  chmodSync,
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, realpathSync, unlinkSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 
 import { dshHomeDir } from './settings'
 
-/**
- * Write a secret file atomically with mode 0600.
- *
- * @param file destination path.
- * @param content file contents.
- */
-export function writeSecretFile (file: string, content: string): void {
-  const directory = dirname(file)
-  mkdirSync(directory, { recursive: true, mode: 0o700 })
-
-  const temp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
-  let handle: number | undefined
-
+/** Real path when it exists, otherwise a lexically resolved absolute path. */
+function realOrResolved (path: string): string {
   try {
-    handle = openSync(temp, 'w', 0o600)
-    writeFileSync(handle, content, 'utf8')
-    fsyncSync(handle)
-    closeSync(handle)
-    handle = undefined
-  } catch (error) {
-    if (handle !== undefined) {
-      try { closeSync(handle) } catch { /* already closed */ }
-    }
-
-    try { unlinkSync(temp) } catch { /* nothing to clean up */ }
-    throw error
+    return realpathSync.native(path)
+  } catch {
+    return resolve(path)
   }
-
-  try {
-    renameSync(temp, file)
-  } catch (error) {
-    try { unlinkSync(temp) } catch { /* nothing to clean up */ }
-    throw error
-  }
-
-  // openSync's mode only applies on creation: an existing destination keeps
-  // its old bits through rename, so tighten them explicitly.
-  try { chmodSync(file, 0o600) } catch { /* non-POSIX filesystem */ }
 }
 
 /**
@@ -73,8 +29,8 @@ export function writeSecretFile (file: string, content: string): void {
 export function isInsideDshHome (file: string | null | undefined): boolean {
   if (typeof file !== 'string' || file.trim() === '') return false
 
-  const home = resolve(dshHomeDir())
-  const parent = dirname(resolve(file))
+  const home = realOrResolved(dshHomeDir())
+  const parent = realOrResolved(dirname(resolve(file)))
   const relation = relative(home, parent)
 
   // `''` means a direct child of the home; the target is a file there, never

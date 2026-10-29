@@ -1,11 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+import { writeSecretFile } from './atomicFile'
 import {
   KEY_ENCRYPTED_FILENAME,
   MAX_BODY_BYTES,
   TOKEN_TTL_SECONDS,
 } from './constants'
+import type { StatusAuth, StatusPayload } from './contracts'
 import {
   isLoopbackRequest,
   isTrustedApiRequest,
@@ -13,7 +15,7 @@ import {
   readJsonBody,
   writeJson,
 } from './fence'
-import type { AuthStatus, GitIdentity, ToolInfo } from './github'
+import type { AuthStatus } from './github'
 import {
   connect,
   disconnect,
@@ -26,7 +28,7 @@ import {
   setGitIdentity,
 } from './github'
 import { encryptPrivateKey, passphraseError } from './keyCrypto'
-import { isInsideDshHome, removeSecretFile, writeSecretFile } from './secureFile'
+import { isInsideDshHome, removeSecretFile } from './secureFile'
 import type { GithubSettings } from './settings'
 import {
   encryptedKeyPath,
@@ -36,21 +38,6 @@ import {
 } from './settings'
 
 export type ApiHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
-
-interface StatusAuth {
-  loggedIn: boolean
-  gitConfigured: boolean
-  error?: string
-}
-
-interface ToolStatus {
-  installed: boolean
-  version: string | null
-}
-
-interface ApiError {
-  message: string
-}
 
 /**
  * The slice of the DSH `connection` service this plugin relies on. It is
@@ -143,53 +130,43 @@ function ok (res: ServerResponse, value: unknown): void {
 }
 
 function fail (res: ServerResponse, status: number, message: string): void {
-  writeJson(res, status, { ok: false, error: { message } as ApiError })
+  writeJson(res, status, { ok: false, error: { message } })
 }
 
+type StoredKey = { ok: true, keyPath: string } | { ok: false, status: number, message: string }
+
+const PEM_MARKER = /PRIVATE KEY-----/
+
 /**
- * Encrypt a PEM and store it at the fixed encrypted-key path.
+ * Validate browser-supplied key material, encrypt it and store it at the
+ * fixed encrypted-key path.
  *
  * @param pem PEM text.
  * @param passphrase user passphrase; never persisted.
- * @returns the path of the written envelope.
+ * @returns the stored path, or an HTTP status and message for the failure.
  */
-async function writeEncryptedKey (pem: string, passphrase: string): Promise<string> {
-  const envelope = await encryptPrivateKey(pem, passphrase)
-  const keyPath = encryptedKeyPath()
+async function storeEncryptedKey (pem: string, passphrase: unknown): Promise<StoredKey> {
+  const invalid = passphraseError(passphrase)
 
-  writeSecretFile(keyPath, envelope)
+  if (invalid !== null) return { ok: false, status: 400, message: invalid }
+  if (!PEM_MARKER.test(pem)) return { ok: false, status: 400, message: 'Invalid private key format' }
 
-  return keyPath
+  try {
+    const envelope = await encryptPrivateKey(pem, passphrase as string)
+    const keyPath = encryptedKeyPath()
+
+    writeSecretFile(keyPath, envelope)
+
+    return { ok: true, keyPath }
+  } catch (error) {
+    return { ok: false, status: 500, message: errorMessage(error, 'Cannot store encrypted private key') }
+  }
 }
 
-async function statusPayload (): Promise<{
-  gh: ToolStatus
-  git: ToolStatus
-  gitInfo: ToolStatus
-  gitVersion: ToolStatus
-  gitCli: ToolStatus
-  gitCliInfo: ToolStatus
-  config: {
-    appId: string
-    installationId: string
-    gitUserName: string
-    gitUserEmail: string
-    keyFileName: string | null
-    hasKey: boolean
-    keyEncrypted: boolean
-  }
-  auth: StatusAuth
-  token: {
-    issuedAt: number | null
-    expiresAt: number | null
-    ttlSeconds: number
-    active: boolean
-  }
-  gitIdentity: GitIdentity
-}> {
+async function statusPayload (): Promise<StatusPayload> {
   const settings = readSettings()
-  const gh: ToolInfo = await getGhInfo()
-  const git: ToolInfo = await getGitInfo()
+  const gh = await getGhInfo()
+  const git = await getGitInfo()
   let auth: StatusAuth = { loggedIn: false, gitConfigured: false }
   if (gh.installed) auth = await getAuthStatus()
   const gitIdentity = git.installed ? await getGitIdentity() : { name: '', email: '' }
@@ -197,10 +174,6 @@ async function statusPayload (): Promise<{
   return {
     gh,
     git,
-    gitInfo: git,
-    gitVersion: git,
-    gitCli: git,
-    gitCliInfo: git,
     config: {
       appId: settings.appId,
       installationId: settings.installationId,
@@ -284,20 +257,13 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
           break
         }
 
-        case 'installGh':
-        case 'install':
-        case 'installMissing':
-        case 'installCli':
-
-        case 'installTools': {
+        case 'installGh': {
           const result = await installGh()
           ok(res, { install: result, status: await statusPayload() })
           break
         }
 
-        case 'installGit':
-
-        case 'installGitCli': {
+        case 'installGit': {
           const result = await installGit()
           ok(res, { install: result, status: await statusPayload() })
           break
@@ -313,38 +279,21 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
 
           // handle pem upload
           if (typeof payload.pemBase64 === 'string' && payload.pemBase64.trim() !== '') {
-            const invalid = passphraseError(payload.passphrase)
-
-            if (invalid !== null) {
-              fail(res, 400, invalid)
-
-              return
-            }
-
             const pemBuffer = Buffer.from(payload.pemBase64, 'base64')
             let pemText = pemBuffer.toString('utf8')
 
-            if (!/PRIVATE KEY-----/.test(pemText)) {
-              pemBuffer.fill(0)
-              fail(res, 400, 'Invalid private key format')
-
-              return
-            }
-
-            let keyPath: string
-
-            try {
-              keyPath = await writeEncryptedKey(pemText, payload.passphrase as string)
-            } catch (error) {
-              fail(res, 500, errorMessage(error, 'Cannot store encrypted private key'))
-
-              return
-            } finally {
+            const stored = await storeEncryptedKey(pemText, payload.passphrase).finally(() => {
               pemText = ''
               pemBuffer.fill(0)
+            })
+
+            if (!stored.ok) {
+              fail(res, stored.status, stored.message)
+
+              return
             }
 
-            patch.keyPath = keyPath
+            patch.keyPath = stored.keyPath
             patch.keyEncrypted = true
 
             patch.keyFileName = typeof payload.pemFileName === 'string' && payload.pemFileName.trim() !== ''
@@ -390,13 +339,6 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
             break
           }
 
-          const invalid = passphraseError(payload.passphrase)
-
-          if (invalid !== null) {
-            fail(res, 400, invalid)
-            break
-          }
-
           let pemText: string
 
           try {
@@ -406,23 +348,16 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
             break
           }
 
-          if (!/PRIVATE KEY-----/.test(pemText)) {
-            fail(res, 400, 'Invalid private key format')
-            break
-          }
-
-          let keyPath: string
-
-          try {
-            keyPath = await writeEncryptedKey(pemText, payload.passphrase as string)
-          } catch (error) {
-            fail(res, 500, errorMessage(error, 'Cannot store encrypted private key'))
-            break
-          } finally {
+          const stored = await storeEncryptedKey(pemText, payload.passphrase).finally(() => {
             pemText = ''
+          })
+
+          if (!stored.ok) {
+            fail(res, stored.status, stored.message)
+            break
           }
 
-          const next = writeSettings({ ...readSettings(), keyPath, keyEncrypted: true })
+          const next = writeSettings({ ...readSettings(), keyPath: stored.keyPath, keyEncrypted: true })
 
           removeSecretFile(current.keyPath)
 

@@ -16,7 +16,7 @@ interface PluginContext {
 
 export const name = 'github'
 
-export const inject = ['webServer', 'webStartup', 'credentials']
+export const inject = ['webServer', 'webStartup']
 
 export function apply (ctx: PluginContext): void {
   migrateLegacyLayout()

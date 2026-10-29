@@ -34,12 +34,16 @@ export function isLoopbackHostname (hostname: unknown): boolean {
     parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)
 }
 
-export function canonicalAuthority (authority: string): string | undefined {
-  const url = parseAuthority(authority)
-  if (url === undefined) return undefined
+function canonicalFrom (url: URL, authority: string): string {
   const explicitPort = /:(\d+)$/.exec(authority.trim())
 
   return explicitPort === null ? url.hostname : `${url.hostname}:${explicitPort[1]}`
+}
+
+export function canonicalAuthority (authority: string): string | undefined {
+  const url = parseAuthority(authority)
+
+  return url === undefined ? undefined : canonicalFrom(url, authority)
 }
 
 function isTrustedAuthority (authority: string, hostUrl: URL, trustedHosts: string[]): boolean {
@@ -48,11 +52,9 @@ function isTrustedAuthority (authority: string, hostUrl: URL, trustedHosts: stri
   return trustedHosts.some((entry) => {
     const url = parseAuthority(entry)
     if (url === undefined) return false
-    const canonical = canonicalAuthority(entry)
-    if (canonical === undefined) return false
-    const entryHasPort = /:\d+$/.test(entry.trim())
+    const canonical = canonicalFrom(url, entry)
 
-    return entryHasPort ? canonical === requestAuthority : url.hostname === hostUrl.hostname
+    return canonical !== url.hostname ? canonical === requestAuthority : url.hostname === hostUrl.hostname
   })
 }
 
@@ -78,12 +80,16 @@ export function buildTrustedHosts (entries: unknown, warn?: (message: string) =>
   return trusted
 }
 
+function headersOf (req: unknown): Record<string, unknown> {
+  return req !== null && typeof req === 'object' && 'headers' in req && req.headers !== null && typeof req.headers === 'object'
+    ? req.headers as Record<string, unknown>
+    : {}
+}
+
 export function isTrustedApiRequest (req: unknown, trustedHosts: string[] = []): boolean {
   if (req === null || typeof req !== 'object') return false
 
-  const headers: Record<string, unknown> = 'headers' in req && req.headers !== null && typeof req.headers === 'object'
-    ? req.headers as Record<string, unknown>
-    : {}
+  const headers = headersOf(req)
 
   const host = typeof headers.host === 'string' ? headers.host : undefined
   if (host === undefined) return false
@@ -115,9 +121,7 @@ export function isTrustedApiRequest (req: unknown, trustedHosts: string[] = []):
 export function isLoopbackRequest (req: unknown): boolean {
   if (req === null || typeof req !== 'object') return false
 
-  const headers: Record<string, unknown> = 'headers' in req && req.headers !== null && typeof req.headers === 'object'
-    ? req.headers as Record<string, unknown>
-    : {}
+  const headers = headersOf(req)
 
   const host = typeof headers.host === 'string' ? headers.host : undefined
 

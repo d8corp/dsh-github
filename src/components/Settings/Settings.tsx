@@ -1,6 +1,7 @@
 import type * as ReactTypes from 'react'
 
 import { MIN_PASSPHRASE_CHARS, TOKEN_TTL_SECONDS } from '../../constants'
+import type { StatusAuth, StatusConfig, StatusPayload, StatusToken, ToolStatus } from '../../contracts'
 import { Button } from '../../ui/Button'
 import { Countdown } from '../../ui/Countdown'
 import { FileInput } from '../../ui/FileInput'
@@ -9,49 +10,6 @@ import { Notice } from '../../ui/Notice'
 import { Row } from '../../ui/Raw'
 import { Status } from '../../ui/Status'
 import { callApi, errorMessage, getReact, resolveTokenExpiry } from '../../utils'
-
-interface GithubToolState {
-  installed: boolean
-  version: string | null
-}
-
-interface GithubConfigState {
-  appId: string
-  installationId: string
-  gitUserName: string
-  gitUserEmail: string
-  keyFileName: string | null
-  hasKey: boolean
-  keyEncrypted: boolean
-}
-
-interface GithubAuthState {
-  loggedIn: boolean
-  gitConfigured: boolean
-  error?: string
-}
-
-interface GithubIdentityState {
-  name: string
-  email: string
-}
-
-interface GithubTokenState {
-  issuedAt: number | null
-  expiresAt: number | null
-  ttlSeconds: number
-  active: boolean
-}
-
-interface GithubStatus {
-  gh: GithubToolState
-  git: GithubToolState
-  gitInfo?: GithubToolState
-  config: GithubConfigState
-  auth: GithubAuthState
-  gitIdentity: GithubIdentityState
-  token?: GithubTokenState
-}
 
 interface GithubActionResult {
   ok?: boolean
@@ -91,7 +49,7 @@ export function Settings () {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<GithubMessage | null>(null)
-  const [status, setStatus] = useState<GithubStatus | null>(null)
+  const [status, setStatus] = useState<StatusPayload | null>(null)
   const [appId, setAppId] = useState('')
   const [installationId, setInstallationId] = useState('')
   const [gitUserName, setGitUserName] = useState('')
@@ -101,7 +59,7 @@ export function Settings () {
 
   async function refresh (): Promise<void> {
     try {
-      const value = await callApi('status') as GithubStatus | null
+      const value = await callApi('status') as StatusPayload | null
       setStatus(value)
       setAppId((value && value.config && value.config.appId) || '')
       setInstallationId((value && value.config && value.config.installationId) || '')
@@ -160,14 +118,21 @@ export function Settings () {
     })
   }
 
+  function requirePassphrase (): boolean {
+    const problem = passphraseProblem(passphrase)
+
+    if (problem === null) return true
+
+    setMessage({ kind: 'error', text: problem })
+
+    return false
+  }
+
   async function handleUpload (event: ReactTypes.ChangeEvent<HTMLInputElement>): Promise<void> {
     const file = event.target.files && event.target.files[0]
     if (!file) return
 
-    const problem = passphraseProblem(passphrase)
-
-    if (problem !== null) {
-      setMessage({ kind: 'error', text: problem })
+    if (!requirePassphrase()) {
       event.target.value = ''
 
       return
@@ -191,13 +156,7 @@ export function Settings () {
   }
 
   async function handleEncrypt (): Promise<void> {
-    const problem = passphraseProblem(passphrase)
-
-    if (problem !== null) {
-      setMessage({ kind: 'error', text: problem })
-
-      return
-    }
+    if (!requirePassphrase()) return
 
     await withBusy(async () => {
       await callApi('encryptKey', { passphrase })
@@ -206,13 +165,7 @@ export function Settings () {
   }
 
   async function handleConnect (): Promise<void> {
-    const problem = passphraseProblem(passphrase)
-
-    if (problem !== null) {
-      setMessage({ kind: 'error', text: problem })
-
-      return
-    }
+    if (!requirePassphrase()) return
 
     await withBusy(async () => {
       const result = await callApi('connect', { passphrase }) as { connect?: GithubActionResult } | null
@@ -242,11 +195,11 @@ export function Settings () {
     )
   }
 
-  const gh = (status && status.gh) || { installed: false, version: null }
-  const git = (status && (status.git || status.gitInfo)) || { installed: false, version: null }
-  const config = (status && status.config) || { hasKey: false, keyEncrypted: false, keyFileName: null, appId: '', installationId: '', gitUserName: '', gitUserEmail: '' }
-  const auth = (status && status.auth) || { loggedIn: false, gitConfigured: false }
-  const token = status && status.token
+  const gh: ToolStatus = (status && status.gh) || { installed: false, version: null }
+  const git: ToolStatus = (status && status.git) || { installed: false, version: null }
+  const config: StatusConfig = (status && status.config) || { hasKey: false, keyEncrypted: false, keyFileName: null, appId: '', installationId: '', gitUserName: '', gitUserEmail: '' }
+  const auth: StatusAuth = (status && status.auth) || { loggedIn: false, gitConfigured: false }
+  const token: StatusToken | null = status ? status.token : null
 
   const ttlSeconds = token && typeof token.ttlSeconds === 'number' && Number.isFinite(token.ttlSeconds)
     ? token.ttlSeconds
