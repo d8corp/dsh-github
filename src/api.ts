@@ -27,7 +27,8 @@ import {
   installGit,
   setGitIdentity,
 } from './github'
-import { encryptPrivateKey, passphraseError } from './keyCrypto'
+import { encryptPrivateKey } from './keyCrypto'
+import { passphraseError } from './passphrase'
 import { isInsideDshHome, removeSecretFile } from './secureFile'
 import type { GithubSettings } from './settings'
 import {
@@ -36,6 +37,8 @@ import {
   readSettings,
   writeSettings,
 } from './settings'
+import { parseTimestamp } from './time'
+import { errorMessage } from './utils/errorMessage'
 
 export type ApiHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
 
@@ -108,23 +111,6 @@ function sessionRejection (ctx: unknown, req: IncomingMessage): number | undefin
   return rejection === 401 ? 401 : 403
 }
 
-/**
- * Parse a persisted ISO-8601 token timestamp into epoch milliseconds.
- *
- * @param value ISO string stored in settings, or null.
- * @returns epoch milliseconds, or null when missing or unparsable.
- */
-function tokenTime (value: string | null): number | null {
-  if (typeof value !== 'string' || value.trim() === '') return null
-  const ms = Date.parse(value)
-
-  return Number.isFinite(ms) ? ms : null
-}
-
-function errorMessage (error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback
-}
-
 function ok (res: ServerResponse, value: unknown): void {
   writeJson(res, 200, { ok: true, value })
 }
@@ -185,8 +171,8 @@ async function statusPayload (): Promise<StatusPayload> {
     },
     auth,
     token: {
-      issuedAt: tokenTime(settings.tokenIssuedAt),
-      expiresAt: tokenTime(settings.tokenExpiresAt),
+      issuedAt: parseTimestamp(settings.tokenIssuedAt),
+      expiresAt: parseTimestamp(settings.tokenExpiresAt),
       ttlSeconds: TOKEN_TTL_SECONDS,
       active: auth.loggedIn,
     },
@@ -270,12 +256,13 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
         }
 
         case 'saveConfig': {
-          const current = readSettings()
           const patch: Partial<GithubSettings> = {}
           if (typeof payload.appId === 'string') patch.appId = payload.appId
           if (typeof payload.installationId === 'string') patch.installationId = payload.installationId
           if (typeof payload.gitUserName === 'string') patch.gitUserName = payload.gitUserName
           if (typeof payload.gitUserEmail === 'string') patch.gitUserEmail = payload.gitUserEmail
+
+          let uploadedName: string | null = null
 
           // handle pem upload
           if (typeof payload.pemBase64 === 'string' && payload.pemBase64.trim() !== '') {
@@ -295,15 +282,16 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
 
             patch.keyPath = stored.keyPath
             patch.keyEncrypted = true
-
-            patch.keyFileName = typeof payload.pemFileName === 'string' && payload.pemFileName.trim() !== ''
-              ? payload.pemFileName.trim()
-              : (current.keyFileName || KEY_ENCRYPTED_FILENAME)
+            uploadedName = typeof payload.pemFileName === 'string' ? payload.pemFileName.trim() : ''
           }
 
           // Re-read after the async encryption above: a concurrent auto-save
           // must not be rolled back by a stale snapshot.
           const latest = readSettings()
+
+          if (uploadedName !== null) {
+            patch.keyFileName = uploadedName || latest.keyFileName || KEY_ENCRYPTED_FILENAME
+          }
 
           const replacedKeyPath = patch.keyPath && latest.keyPath && latest.keyPath !== patch.keyPath && isInsideDshHome(latest.keyPath)
             ? latest.keyPath
@@ -313,7 +301,7 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
 
           if (replacedKeyPath !== null) removeSecretFile(replacedKeyPath)
 
-          if (Object.prototype.hasOwnProperty.call(patch, 'gitUserName') || Object.prototype.hasOwnProperty.call(patch, 'gitUserEmail')) {
+          if ('gitUserName' in patch || 'gitUserEmail' in patch) {
             await setGitIdentity(next.gitUserName, next.gitUserEmail)
           }
 

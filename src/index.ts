@@ -21,7 +21,7 @@ export const inject = ['webServer', 'webStartup']
 export function apply (ctx: PluginContext): void {
   migrateLegacyLayout()
 
-  const trustedHosts = buildTrustedHosts(ctx.webStartup && ctx.webStartup.trustedHosts, (message) => {
+  const trustedHosts = buildTrustedHosts(ctx.webStartup?.trustedHosts, (message) => {
     // eslint-disable-next-line no-console
     console.warn('[@d8corp/dsh-github] ignoring invalid trusted host:', message)
   })

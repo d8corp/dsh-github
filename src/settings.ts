@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path'
 
 import { writeSecretFile } from './atomicFile'
 import { KEY_ENCRYPTED_FILENAME, KEY_FILENAME, PLUGIN_DIR_NAME, SETTINGS_FILENAME } from './constants'
+import { parseTimestamp } from './time'
 
 export interface GithubSettings {
   appId: string
@@ -131,17 +132,9 @@ function normalizePath (value: unknown): string | null {
  * @returns canonical ISO string, or null when the value is unusable.
  */
 function normalizeTimestamp (value: unknown): string | null {
-  let ms: number
+  const ms = parseTimestamp(value)
 
-  if (typeof value === 'number') {
-    ms = value
-  } else if (typeof value === 'string' && value.trim() !== '') {
-    ms = Date.parse(value)
-  } else {
-    return null
-  }
-
-  if (!Number.isFinite(ms) || ms < 0) return null
+  if (ms === null) return null
 
   try {
     return new Date(ms).toISOString()
@@ -166,23 +159,6 @@ export function normalizeSettings (value: unknown): GithubSettings {
     tokenIssuedAt: normalizeTimestamp(source.tokenIssuedAt),
     tokenExpiresAt: normalizeTimestamp(source.tokenExpiresAt),
   }
-}
-
-export function mergeSettings (current: unknown, patch: unknown): GithubSettings {
-  const base = normalizeSettings(current)
-  if (!isPlainObject(patch)) return base
-  const next: Record<string, unknown> = { ...base }
-  if (Object.prototype.hasOwnProperty.call(patch, 'appId')) next.appId = patch.appId
-  if (Object.prototype.hasOwnProperty.call(patch, 'installationId')) next.installationId = patch.installationId
-  if (Object.prototype.hasOwnProperty.call(patch, 'gitUserName')) next.gitUserName = patch.gitUserName
-  if (Object.prototype.hasOwnProperty.call(patch, 'gitUserEmail')) next.gitUserEmail = patch.gitUserEmail
-  if (Object.prototype.hasOwnProperty.call(patch, 'keyPath')) next.keyPath = patch.keyPath
-  if (Object.prototype.hasOwnProperty.call(patch, 'keyFileName')) next.keyFileName = patch.keyFileName
-  if (Object.prototype.hasOwnProperty.call(patch, 'keyEncrypted')) next.keyEncrypted = patch.keyEncrypted
-  if (Object.prototype.hasOwnProperty.call(patch, 'tokenIssuedAt')) next.tokenIssuedAt = patch.tokenIssuedAt
-  if (Object.prototype.hasOwnProperty.call(patch, 'tokenExpiresAt')) next.tokenExpiresAt = patch.tokenExpiresAt
-
-  return normalizeSettings(next)
 }
 
 export function readSettings (file = defaultSettingsFile()): GithubSettings {

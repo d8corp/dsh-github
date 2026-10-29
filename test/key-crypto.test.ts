@@ -6,10 +6,9 @@ import { generateKeyPairSync } from 'node:crypto'
 import {
   decryptPrivateKey,
   encryptPrivateKey,
-  MAX_PASSPHRASE_CHARS,
-  MIN_PASSPHRASE_CHARS,
-  passphraseError,
 } from '../src/keyCrypto'
+import { MAX_PASSPHRASE_CHARS, MIN_PASSPHRASE_CHARS } from '../src/constants'
+import { passphraseError } from '../src/passphrase'
 
 const PRIVATE_KEY_PEM = generateKeyPairSync('rsa', { modulusLength: 2048 })
   .privateKey

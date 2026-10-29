@@ -4,9 +4,11 @@ import { existsSync, readFileSync } from 'node:fs'
 
 import { DEFAULT_HOSTNAME, TOKEN_TTL_SECONDS } from './constants'
 import type { GitIdentity, ToolStatus } from './contracts'
-import { decryptPrivateKey, passphraseError } from './keyCrypto'
+import { decryptPrivateKey } from './keyCrypto'
+import { passphraseError } from './passphrase'
 import type { GithubSettings } from './settings'
 import { readSettings, writeSettings } from './settings'
+import { parseTimestamp } from './time'
 
 export interface RunOptions {
   cwd?: string
@@ -326,19 +328,6 @@ function apiBaseFor (hostname: string): string {
   return hostname === 'github.com' ? 'https://api.github.com' : `https://${hostname}/api/v3`
 }
 
-/**
- * Parse the GitHub API `expires_at` field (ISO-8601) into epoch milliseconds.
- *
- * @param value raw `expires_at` field of the access-token response.
- * @returns epoch milliseconds, or null when missing or unparsable.
- */
-function parseTokenExpiry (value: unknown): number | null {
-  if (typeof value !== 'string' || value.trim() === '') return null
-  const ms = Date.parse(value)
-
-  return Number.isFinite(ms) ? ms : null
-}
-
 async function fetchInstallationToken (jwt: string, installationId: string, hostname: string): Promise<TokenResult> {
   const url = `${apiBaseFor(hostname)}/app/installations/${encodeURIComponent(String(installationId))}/access_tokens`
   let response: Response
@@ -376,7 +365,9 @@ async function fetchInstallationToken (jwt: string, installationId: string, host
     return { ok: false, error: 'No installation token in GitHub API response' }
   }
 
-  const expiresAt = parseTokenExpiry((data as { expires_at?: unknown }).expires_at)
+  // The API field is documented as a string; anything else is treated as absent.
+  const rawExpiresAt = (data as { expires_at?: unknown }).expires_at
+  const expiresAt = typeof rawExpiresAt === 'string' ? parseTimestamp(rawExpiresAt) : null
 
   return { ok: true, token: data.token, expiresAt }
 }

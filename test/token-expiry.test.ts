@@ -12,7 +12,7 @@ import { createApiHandler } from '../src/api'
 import { TOKEN_TTL_SECONDS } from '../src/constants'
 import { connect, disconnect, getAuthStatus } from '../src/github'
 import { decryptPrivateKey, encryptPrivateKey } from '../src/keyCrypto'
-import { mergeSettings, normalizeSettings, readSettings, writeSettings } from '../src/settings'
+import { normalizeSettings, readSettings, writeSettings } from '../src/settings'
 
 const isWindows = process.platform === 'win32'
 const testUnlessWindows = isWindows ? test.skip : test
@@ -498,24 +498,10 @@ describe('normalizeSettings token lifetime', () => {
     expect(normalizeSettings({ tokenExpiresAt: '2026-01-02' }).tokenExpiresAt).toBe('2026-01-02T00:00:00.000Z')
   })
 
-  test('mergeSettings allowlists both keys and normalizes the patch', () => {
-    const merged = mergeSettings(
-      { appId: '7', tokenIssuedAt: API_ISSUED_ISO },
-      { installationId: '8', tokenExpiresAt: API_EXPIRES_MS },
-    )
-
-    expect(merged.appId).toBe('7')
-    expect(merged.installationId).toBe('8')
-    expect(merged.tokenIssuedAt).toBe(API_ISSUED_ISO)
-    expect(merged.tokenExpiresAt).toBe(API_EXPIRES_ISO)
-    expect(mergeSettings({ tokenExpiresAt: API_EXPIRES_ISO }, { tokenExpiresAt: 'garbage' }).tokenExpiresAt).toBeNull()
-  })
-
-  test('keyEncrypted is strictly boolean and mergeable', () => {
+  test('keyEncrypted is strictly boolean', () => {
     expect(normalizeSettings({}).keyEncrypted).toBe(false)
     expect(normalizeSettings({ keyEncrypted: 'true' }).keyEncrypted).toBe(false)
     expect(normalizeSettings({ keyEncrypted: true }).keyEncrypted).toBe(true)
-    expect(mergeSettings({ keyEncrypted: true }, {}).keyEncrypted).toBe(true)
   })
 })
 
