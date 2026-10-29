@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { join } from 'node:path'
 
 import {
   KEY_ENCRYPTED_FILENAME,
@@ -30,7 +29,7 @@ import { encryptPrivateKey, passphraseError } from './keyCrypto'
 import { isInsideDshHome, removeSecretFile, writeSecretFile } from './secureFile'
 import type { GithubSettings } from './settings'
 import {
-  dshHomeDir,
+  encryptedKeyPath,
   keyFileExists,
   readSettings,
   writeSettings,
@@ -156,7 +155,7 @@ function fail (res: ServerResponse, status: number, message: string): void {
  */
 async function writeEncryptedKey (pem: string, passphrase: string): Promise<string> {
   const envelope = await encryptPrivateKey(pem, passphrase)
-  const keyPath = join(dshHomeDir(), KEY_ENCRYPTED_FILENAME)
+  const keyPath = encryptedKeyPath()
 
   writeSecretFile(keyPath, envelope)
 
@@ -435,7 +434,7 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
           const current = readSettings()
 
           removeSecretFile(current.keyPath)
-          removeSecretFile(join(dshHomeDir(), KEY_ENCRYPTED_FILENAME))
+          removeSecretFile(encryptedKeyPath())
 
           writeSettings({ appId: '', installationId: '', keyPath: null, keyFileName: null, keyEncrypted: false })
           ok(res, await statusPayload())

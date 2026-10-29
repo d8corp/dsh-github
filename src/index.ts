@@ -2,6 +2,7 @@ import type { ApiHandler } from './api'
 import { createApiHandler } from './api'
 import { API_PREFIX } from './constants'
 import { buildTrustedHosts } from './fence'
+import { migrateLegacyLayout } from './settings'
 
 interface PluginContext {
   webStartup?: {
@@ -18,6 +19,8 @@ export const name = 'github'
 export const inject = ['webServer', 'webStartup', 'credentials']
 
 export function apply (ctx: PluginContext): void {
+  migrateLegacyLayout()
+
   const trustedHosts = buildTrustedHosts(ctx.webStartup && ctx.webStartup.trustedHosts, (message) => {
     // eslint-disable-next-line no-console
     console.warn('[@d8corp/dsh-github] ignoring invalid trusted host:', message)

@@ -31,7 +31,7 @@ import { dshHomeDir } from './settings'
  */
 export function writeSecretFile (file: string, content: string): void {
   const directory = dirname(file)
-  mkdirSync(directory, { recursive: true })
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
 
   const temp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
   let handle: number | undefined
