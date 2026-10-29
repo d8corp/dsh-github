@@ -1,7 +1,7 @@
 // jest.config.ts
 export default {
   testEnvironment: 'node',
-  testPathIgnorePatterns: ['.*.speed.test.ts$', 'speed-test'],
+  testPathIgnorePatterns: ['.*.speed.test.ts$', 'speed-test', '<rootDir>/.deploy/'],
   coverageDirectory: 'docs/coverage',
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
