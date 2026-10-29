@@ -17,6 +17,14 @@ The passphrase is not stored anywhere and is required for upload, for encrypting
 
 Parameters are saved automatically on change.
 
+## Uninstall
+
+Removing the bundle deletes the plugin-owned `$DSH_HOME/dsh-github/` directory — settings and the encrypted key — about 15 seconds after the profile stops listing the package in `dependencies` and `dsh.profile.bundles`. DSH has no uninstall hook, so the running host watches its own profile and performs the cleanup; disabling the plugin, an HMR reload, or a host restart keeps the data because the profile still declares the package.
+
+- Removing the package while no DSH host is running (`dsh plugin remove` from a shell) leaves the watcher without a process to run in; delete `$DSH_HOME/dsh-github/` manually.
+- A DSH update is a removal followed by an installation, so the cleanup also runs on update. Reinstall within the 15-second window, or back up the directory first, to keep the current settings.
+- The `gh` token store and the git identity are shared user settings and are left untouched.
+
 ## Security
 
 - The plugin API accepts loopback requests directly. Any other authority must also present a live DSH browser session; `--trusted-host` alone is not enough.
