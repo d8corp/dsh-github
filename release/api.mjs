@@ -1,10 +1,21 @@
-import { KEY_FILENAME, MAX_BODY_BYTES } from "./constants.mjs";
+import { KEY_FILENAME, MAX_BODY_BYTES, TOKEN_TTL_SECONDS } from "./constants.mjs";
 import { PAYLOAD_TOO_LARGE, isTrustedApiRequest, readJsonBody, writeJson } from "./fence.mjs";
-import { connect, disconnect, getAuthStatus, getGhInfo, getGitIdentity, getGitInfo, installGh, installGit, setGitIdentity } from "./github.mjs";
 import { dshHomeDir, keyFileExists, readSettings, writeSettings } from "./settings.mjs";
+import { connect, disconnect, getAuthStatus, getGhInfo, getGitIdentity, getGitInfo, installGh, installGit, setGitIdentity } from "./github.mjs";
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 // src/api.ts
+/**
+* Parse a persisted ISO-8601 token timestamp into epoch milliseconds.
+*
+* @param value ISO string stored in settings, or null.
+* @returns epoch milliseconds, or null when missing or unparsable.
+*/
+function tokenTime(value) {
+	if (typeof value !== "string" || value.trim() === "") return null;
+	const ms = Date.parse(value);
+	return Number.isFinite(ms) ? ms : null;
+}
 function errorMessage(error, fallback) {
 	return error instanceof Error && error.message ? error.message : fallback;
 }
@@ -49,6 +60,12 @@ async function statusPayload() {
 			hasKey: keyFileExists(settings)
 		},
 		auth,
+		token: {
+			issuedAt: tokenTime(settings.tokenIssuedAt),
+			expiresAt: tokenTime(settings.tokenExpiresAt),
+			ttlSeconds: TOKEN_TTL_SECONDS,
+			active: auth.loggedIn
+		},
 		gitIdentity
 	};
 }

@@ -2,6 +2,8 @@ import type { GithubSettings } from './settings';
 export interface RunOptions {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
+    /** Variables to drop from the inherited environment before spawning. */
+    unset?: string[];
     timeout?: number;
     input?: string;
 }

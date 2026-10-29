@@ -60,6 +60,28 @@ function normalizePath(value) {
 	if (trimmed === "") return null;
 	return trimmed;
 }
+/**
+* Normalize a persisted token timestamp to canonical ISO-8601 UTC.
+*
+* Accepts a parseable date string or a finite, non-negative epoch-millisecond
+* number; anything else — objects, arrays, `"nonsense"`, `NaN`, negative or
+* out-of-range numbers — normalizes to `null` instead of throwing.
+*
+* @param value candidate timestamp read from settings JSON.
+* @returns canonical ISO string, or null when the value is unusable.
+*/
+function normalizeTimestamp(value) {
+	let ms;
+	if (typeof value === "number") ms = value;
+	else if (typeof value === "string" && value.trim() !== "") ms = Date.parse(value);
+	else return null;
+	if (!Number.isFinite(ms) || ms < 0) return null;
+	try {
+		return new Date(ms).toISOString();
+	} catch {
+		return null;
+	}
+}
 function normalizeSettings(value) {
 	const source = isPlainObject(value) ? value : {};
 	return {
@@ -68,7 +90,9 @@ function normalizeSettings(value) {
 		gitUserName: typeof source.gitUserName === "string" ? source.gitUserName.trim().slice(0, MAX_GIT_NAME_CHARS) : "",
 		gitUserEmail: typeof source.gitUserEmail === "string" ? source.gitUserEmail.trim().slice(0, MAX_GIT_EMAIL_CHARS) : "",
 		keyPath: normalizePath(source.keyPath),
-		keyFileName: typeof source.keyFileName === "string" && source.keyFileName.trim() !== "" ? source.keyFileName.trim().slice(0, 255) : null
+		keyFileName: typeof source.keyFileName === "string" && source.keyFileName.trim() !== "" ? source.keyFileName.trim().slice(0, 255) : null,
+		tokenIssuedAt: normalizeTimestamp(source.tokenIssuedAt),
+		tokenExpiresAt: normalizeTimestamp(source.tokenExpiresAt)
 	};
 }
 function readSettings(file = settingsPath()) {

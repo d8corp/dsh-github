@@ -8,3 +8,5 @@ export declare const SETTINGS_FILENAME = "github.json";
 export declare const KEY_FILENAME = "github-app.pem";
 /** Default hostname for GitHub. */
 export declare const DEFAULT_HOSTNAME = "github.com";
+/** GitHub App installation access tokens are issued for one hour. */
+export declare const TOKEN_TTL_SECONDS = 3600;

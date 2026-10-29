@@ -12,6 +12,8 @@ export interface GithubSettings {
     gitUserEmail: string;
     keyPath: string | null;
     keyFileName: string | null;
+    tokenIssuedAt: string | null;
+    tokenExpiresAt: string | null;
 }
 /**
  * Resolve the DeepSeek Harness home: `$DSH_HOME` when set, otherwise `~/.dsh`.

@@ -1,14 +1,16 @@
 import { DEFAULT_HOSTNAME } from "./constants.mjs";
+import { readSettings, writeSettings } from "./settings.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createPrivateKey, createSign } from "node:crypto";
 // src/github.ts
 function run(command, args, options = {}) {
 	return new Promise((resolve) => {
-		const env = options.env ? {
+		const env = {
 			...process.env,
-			...options.env
-		} : process.env;
+			...options.env || {}
+		};
+		for (const key of options.unset || []) delete env[key];
 		const child = spawn(command, args, {
 			cwd: options.cwd,
 			env,
@@ -54,10 +56,42 @@ function run(command, args, options = {}) {
 		}, options.timeout);
 		child.on("error", (error) => finish(1, error));
 		child.on("close", (code) => finish(code, null));
+		child.stdin.on("error", () => {});
 		try {
 			if (options.input != null) child.stdin.write(options.input);
 			child.stdin.end();
 		} catch {}
+	});
+}
+/**
+* Environment variables `gh` accepts as a token source.
+*
+* When any of them is set, `gh auth login` and `gh auth logout` refuse to
+* touch gh's own credential store ("…first clear the value from the
+* environment"), and `gh auth status` reports the environment token instead
+* of the stored credentials. The plugin exports the installation token into
+* its own process environment for the agent, so every auth-management command
+* has to run without them — otherwise the second Connect in one server
+* lifetime always fails, and Disconnect never removes the stored credentials.
+*/
+const GH_TOKEN_ENV_KEYS = [
+	"GH_TOKEN",
+	"GITHUB_TOKEN",
+	"GH_ENTERPRISE_TOKEN",
+	"GITHUB_ENTERPRISE_TOKEN"
+];
+/**
+* Run a `gh auth` subcommand with the token environment removed, so it reads
+* and writes gh's credential store rather than the ambient token.
+*
+* @param args `gh` arguments, starting after the binary name.
+* @param options spawn options; `unset` entries are added, never replaced.
+* @returns the command result.
+*/
+function runGhAuth(args, options = {}) {
+	return run("gh", args, {
+		...options,
+		unset: [...options.unset || [], ...GH_TOKEN_ENV_KEYS]
 	});
 }
 async function getGhInfo() {
@@ -143,7 +177,7 @@ function isLoggedInOutput(output) {
 	return false;
 }
 async function getAuthStatus(hostname = DEFAULT_HOSTNAME) {
-	const result = await run("gh", [
+	const result = await runGhAuth([
 		"auth",
 		"status",
 		"--hostname",
@@ -265,6 +299,17 @@ function createAppJwt(appId, privateKeyPem) {
 function apiBaseFor(hostname) {
 	return hostname === "github.com" ? "https://api.github.com" : `https://${hostname}/api/v3`;
 }
+/**
+* Parse the GitHub API `expires_at` field (ISO-8601) into epoch milliseconds.
+*
+* @param value raw `expires_at` field of the access-token response.
+* @returns epoch milliseconds, or null when missing or unparsable.
+*/
+function parseTokenExpiry(value) {
+	if (typeof value !== "string" || value.trim() === "") return null;
+	const ms = Date.parse(value);
+	return Number.isFinite(ms) ? ms : null;
+}
 async function fetchInstallationToken(jwt, installationId, hostname) {
 	const url = `${apiBaseFor(hostname)}/app/installations/${encodeURIComponent(String(installationId))}/access_tokens`;
 	let response;
@@ -303,9 +348,11 @@ async function fetchInstallationToken(jwt, installationId, hostname) {
 		ok: false,
 		error: "No installation token in GitHub API response"
 	};
+	const expiresAt = parseTokenExpiry(data.expires_at);
 	return {
 		ok: true,
-		token: data.token
+		token: data.token,
+		expiresAt
 	};
 }
 async function connect(settings) {
@@ -342,7 +389,7 @@ async function connect(settings) {
 		error: tokenResult.error
 	};
 	const token = tokenResult.token;
-	const login = await run("gh", [
+	const login = await runGhAuth([
 		"auth",
 		"login",
 		"--hostname",
@@ -358,7 +405,16 @@ async function connect(settings) {
 		ok: false,
 		error: (login.stderr || login.stdout || "gh auth login failed").trim()
 	};
-	const setup = await run("gh", ["auth", "setup-git"], { timeout: 12e4 });
+	const issuedAt = Date.now();
+	const expiresAt = tokenResult.expiresAt ?? issuedAt + 36e5;
+	try {
+		writeSettings({
+			...readSettings(),
+			tokenIssuedAt: new Date(issuedAt).toISOString(),
+			tokenExpiresAt: new Date(expiresAt).toISOString()
+		});
+	} catch {}
+	const setup = await runGhAuth(["auth", "setup-git"], { timeout: 12e4 });
 	if (setup.code !== 0) return {
 		ok: false,
 		error: (setup.stderr || setup.stdout || "gh auth setup-git failed").trim(),
@@ -374,7 +430,7 @@ async function connect(settings) {
 	};
 }
 async function disconnect() {
-	await run("gh", [
+	await runGhAuth([
 		"auth",
 		"logout",
 		"--hostname",
@@ -385,6 +441,13 @@ async function disconnect() {
 	});
 	delete process.env.GH_TOKEN;
 	delete process.env.GITHUB_TOKEN;
+	try {
+		writeSettings({
+			...readSettings(),
+			tokenIssuedAt: null,
+			tokenExpiresAt: null
+		});
+	} catch {}
 	return { ok: true };
 }
 async function getGitIdentity() {
