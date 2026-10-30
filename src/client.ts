@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// @d8corp/dsh-github — browser half: the Settings → GitHub section.
+// dsh-github-app — browser half: the Settings → GitHub section.
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -22,7 +22,7 @@ declare global {
   }
 }
 
-const PLUGIN_ID = '@d8corp/dsh-github'
+const PLUGIN_ID = 'dsh-github-app'
 
 window.__ModuleLoader__.load({
   id: PLUGIN_ID,

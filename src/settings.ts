@@ -1,7 +1,7 @@
 /**
- * Host-side settings for @d8corp/dsh-github.
+ * Host-side settings for dsh-github-app.
  *
- * Stored at `$DSH_HOME/dsh-github/github.json` (or `~/.dsh/dsh-github/github.json`).
+ * Stored at `$DSH_HOME/dsh-github-app/github.json` (or `~/.dsh/dsh-github-app/github.json`).
  * The private key is never stored here — only its path on the host. The key
  * itself lives in a separate 0600 file encrypted with a passphrase that is
  * never persisted.
@@ -70,7 +70,7 @@ export function dshHomeDir (env: NodeJS.ProcessEnv = process.env): string {
  * Plugin-owned data directory under the DSH home.
  *
  * @param env environment to read `DSH_HOME` from.
- * @returns `$DSH_HOME/dsh-github`.
+ * @returns `$DSH_HOME/dsh-github-app`.
  */
 export function pluginDir (env: NodeJS.ProcessEnv = process.env): string {
   return join(dshHomeDir(env), PLUGIN_DIR_NAME)
@@ -179,11 +179,11 @@ export function writeSettings (settings: unknown, file = settingsPath()): Github
 
 function warn (message: string): void {
   // eslint-disable-next-line no-console
-  console.warn(`[@d8corp/dsh-github] ${message}`)
+  console.warn(`[dsh-github-app] ${message}`)
 }
 
 /**
- * Move the pre-directory layout into `$DSH_HOME/dsh-github/`.
+ * Move the pre-directory layout into `$DSH_HOME/dsh-github-app/`.
  *
  * Old releases kept `github.json`, `github-app.pem.enc` and the plaintext
  * `github-app.pem` directly under the DSH home. Existing destinations are

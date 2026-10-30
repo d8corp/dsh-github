@@ -22,7 +22,7 @@ import {
 const OTHER_PACKAGE = 'other-plugin'
 
 function makeRoot (): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-github-uninstall-'))
+  return mkdtempSync(join(tmpdir(), 'dsh-github-app-uninstall-'))
 }
 
 function makeProfile (root: string): string {

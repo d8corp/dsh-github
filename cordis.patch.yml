@@ -1,5 +1,5 @@
-# @d8corp/dsh-github profile patch layer.
+# dsh-github-app profile patch layer.
 # Registers the GitHub CLI integration (settings + host API).
 - insert:
     - id: github
-      name: '@d8corp/dsh-github'
+      name: 'dsh-github-app'

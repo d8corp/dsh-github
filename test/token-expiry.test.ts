@@ -186,8 +186,8 @@ interface TokenEnv {
 async function withTokenEnv<T> (fn: (env: TokenEnv) => Promise<T>): Promise<T> {
   const root = mkdtempSync(join(tmpdir(), 'dsh-token-expiry-'))
   const home = join(root, 'home')
-  const keyPath = join(home, 'dsh-github', 'github-app.pem.enc')
-  mkdirSync(join(home, 'dsh-github'), { recursive: true })
+  const keyPath = join(home, 'dsh-github-app', 'github-app.pem.enc')
+  mkdirSync(join(home, 'dsh-github-app'), { recursive: true })
   writeFileSync(keyPath, await encryptPrivateKey(PRIVATE_KEY_PEM, PASSPHRASE), { mode: 0o600 })
 
   const previousHome = process.env.DSH_HOME
@@ -308,7 +308,7 @@ describe('private key protection', () => {
 
   testUnlessWindows('rejects a key upload without a passphrase and leaves the stored key untouched', async () => {
     await withTokenEnv(async ({ home }) => {
-      const keyPath = join(home, 'dsh-github', 'github-app.pem.enc')
+      const keyPath = join(home, 'dsh-github-app', 'github-app.pem.enc')
       const before = readFileSync(keyPath, 'utf8')
 
       const response = await postApi({
@@ -399,7 +399,7 @@ describe('disconnect', () => {
       expect(settings.keyPath).toBe(keyPath)
       expect(settings.keyEncrypted).toBe(true)
 
-      const onDisk = JSON.parse(readFileSync(join(home, 'dsh-github', 'github.json'), 'utf8'))
+      const onDisk = JSON.parse(readFileSync(join(home, 'dsh-github-app', 'github.json'), 'utf8'))
       expect(onDisk.tokenIssuedAt).toBeNull()
       expect(onDisk.tokenExpiresAt).toBeNull()
     }))

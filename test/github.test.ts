@@ -102,7 +102,7 @@ describe('isLoggedInOutput', () => {
  * @param fn callback run with the stub in place.
  */
 async function withStubGh<T> (script: string, fn: () => Promise<T>): Promise<T> {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-github-test-'))
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-github-app-test-'))
   const file = join(dir, 'gh')
   writeFileSync(file, `#!/bin/sh\n${script}\n`, { mode: 0o755 })
   chmodSync(file, 0o755)

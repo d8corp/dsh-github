@@ -14,7 +14,7 @@ import {
 } from '../src/settings'
 
 function withEnv (fn: (home: string) => void): void {
-  const root = mkdtempSync(join(tmpdir(), 'dsh-github-migrate-'))
+  const root = mkdtempSync(join(tmpdir(), 'dsh-github-app-migrate-'))
   const home = join(root, 'home')
   mkdirSync(home, { recursive: true })
 
@@ -46,7 +46,7 @@ describe('migrateLegacyLayout', () => {
 
       migrateLegacyLayout()
 
-      const dir = join(home, 'dsh-github')
+      const dir = join(home, 'dsh-github-app')
       const settings = readSettings()
 
       expect(existsSync(join(home, 'github.json'))).toBe(false)
@@ -83,14 +83,14 @@ describe('migrateLegacyLayout', () => {
 
       expect(existsSync(oldKeyPath)).toBe(false)
       expect(settings.keyEncrypted).toBe(false)
-      expect(settings.keyPath).toBe(join(home, 'dsh-github', 'github-app.pem'))
+      expect(settings.keyPath).toBe(join(home, 'dsh-github-app', 'github-app.pem'))
       expect(readFileSync(settings.keyPath as string, 'utf8')).toBe('PEM')
     })
   })
 
   it('never overwrites files already in the plugin directory', () => {
     withEnv((home) => {
-      const dir = join(home, 'dsh-github')
+      const dir = join(home, 'dsh-github-app')
       const newKeyPath = join(dir, 'github-app.pem.enc')
       const oldKeyPath = join(home, 'github-app.pem.enc')
 
@@ -113,7 +113,7 @@ describe('migrateLegacyLayout', () => {
       writeFileSync(join(home, 'github.json'), JSON.stringify({ appId: '42' }))
 
       expect(readSettings().appId).toBe('42')
-      expect(settingsPath()).toBe(join(home, 'dsh-github', 'github.json'))
+      expect(settingsPath()).toBe(join(home, 'dsh-github-app', 'github.json'))
     })
   })
 
@@ -149,7 +149,7 @@ describe('migrateLegacyLayout', () => {
       migrateLegacyLayout()
 
       expect(readSettings()).toEqual(first)
-      expect(first.keyPath).toBe(join(home, 'dsh-github', 'github-app.pem.enc'))
+      expect(first.keyPath).toBe(join(home, 'dsh-github-app', 'github-app.pem.enc'))
     })
   })
 })

@@ -24,7 +24,7 @@ const MAX_N = 1 << 18
 const MAX_R = 16
 const MAX_P = 4
 // Bump only together with ENVELOPE_VERSION: it binds ciphertexts to this use.
-const AAD = Buffer.from('dsh-github:private-key:v1', 'utf8')
+const AAD = Buffer.from('dsh-github-app:private-key:v1', 'utf8')
 
 interface KeyEnvelope {
   version: number

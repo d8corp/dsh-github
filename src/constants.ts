@@ -5,10 +5,10 @@ export const API_PREFIX = '/github/api'
 export const MAX_BODY_BYTES = 1024 * 1024
 
 /** This package's name as the profile manifest declares it. */
-export const PACKAGE_NAME = '@d8corp/dsh-github'
+export const PACKAGE_NAME = 'dsh-github-app'
 
 /** Plugin data directory name under the DSH home. */
-export const PLUGIN_DIR_NAME = 'dsh-github'
+export const PLUGIN_DIR_NAME = 'dsh-github-app'
 
 /** Settings file name inside the plugin directory. */
 export const SETTINGS_FILENAME = 'github.json'

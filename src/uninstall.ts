@@ -107,7 +107,7 @@ export function removePluginArtifacts (env: NodeJS.ProcessEnv = process.env): bo
   } catch (error) {
     // eslint-disable-next-line no-console
     console.warn(
-      '[@d8corp/dsh-github] cannot remove plugin data:',
+      '[dsh-github-app] cannot remove plugin data:',
       error instanceof Error && error.message ? error.message : error,
     )
 

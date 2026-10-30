@@ -36,7 +36,7 @@ describe('isInsideDshHome', () => {
 
     withHome(home, () => {
       expect(isInsideDshHome(join(home, 'github-app.pem'))).toBe(true)
-      expect(isInsideDshHome(join(home, 'dsh-github', 'github.json'))).toBe(true)
+      expect(isInsideDshHome(join(home, 'dsh-github-app', 'github.json'))).toBe(true)
       expect(isInsideDshHome(join(root, 'outside.pem'))).toBe(false)
       expect(isInsideDshHome(join(home, '..', 'outside.pem'))).toBe(false)
       expect(isInsideDshHome(null)).toBe(false)
@@ -66,7 +66,7 @@ describe('isInsideDshHome', () => {
 describe('removeSecretFile', () => {
   testUnlessWindows('removes a file inside the home', () => {
     const { home } = createRoot()
-    const directory = join(home, 'dsh-github')
+    const directory = join(home, 'dsh-github-app')
     const target = join(directory, 'github-app.pem')
 
     mkdirSync(directory)

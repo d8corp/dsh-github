@@ -57,7 +57,7 @@ export function apply (ctx: PluginContext): void {
 
   const trustedHosts = buildTrustedHosts(ctx.webStartup?.trustedHosts, (message) => {
     // eslint-disable-next-line no-console
-    console.warn('[@d8corp/dsh-github] ignoring invalid trusted host:', message)
+    console.warn('[dsh-github-app] ignoring invalid trusted host:', message)
   })
 
   const handler = createApiHandler(ctx, { trustedHosts })
@@ -66,7 +66,7 @@ export function apply (ctx: PluginContext): void {
     kind: 'prefix',
     path: API_PREFIX,
     handler,
-  }), '@d8corp/dsh-github: api')
+  }), 'dsh-github-app: api')
 
   const profileDir = resolveProfileDir(ctx.baseUrl)
 
@@ -78,6 +78,6 @@ export function apply (ctx: PluginContext): void {
 
     ctx.effect(() => () => {
       watchForUninstallCleanup({ profileDir: watchedProfileDir })
-    }, '@d8corp/dsh-github: uninstall cleanup')
+    }, 'dsh-github-app: uninstall cleanup')
   }
 }
