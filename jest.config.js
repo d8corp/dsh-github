@@ -2,6 +2,7 @@
 export default {
   testEnvironment: 'node',
   testPathIgnorePatterns: ['.*.speed.test.ts$', 'speed-test', '<rootDir>/.deploy/'],
+  modulePathIgnorePatterns: ['<rootDir>/release/'],
   coverageDirectory: 'docs/coverage',
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
