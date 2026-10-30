@@ -1,6 +1,6 @@
 {
   "name": "dsh-github-app",
-  "version": "0.0.3",
+  "version": "0.0.1",
   "private": true,
   "description": "GitHub CLI (gh) integration for DSH: configure a GitHub App and authenticate gh for git operations.",
   "type": "module",

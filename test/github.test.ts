@@ -5,7 +5,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { getAuthStatus, isLoggedInOutput } from '../src/github'
+import { getAuthStatus, installCommands, isLoggedInOutput, packageManagers } from '../src/github'
 
 const isWindows = process.platform === 'win32'
 const testUnlessWindows = isWindows ? test.skip : test
@@ -129,8 +129,9 @@ function stubGh (output: string, code: number): string {
 }
 
 describe('getAuthStatus', () => {
-  testUnlessWindows('reports a healthy setup as logged in despite a stale entry', async () => {
-    await withStubGh(stubGh(FAILED_ENTRY_THEN_ACTIVE_OK, 0), async () => {
+  testUnlessWindows('reports a healthy setup as logged in despite a stale entry and a non-zero exit', async () => {
+    // Real `gh` exits 1 when *any* account has issues, even an inactive one.
+    await withStubGh(stubGh(FAILED_ENTRY_THEN_ACTIVE_OK, 1), async () => {
       const status = await getAuthStatus()
       expect(status.loggedIn).toBe(true)
       expect(status.error).toBeUndefined()
@@ -164,12 +165,74 @@ describe('getAuthStatus', () => {
     })
   })
 
-  testUnlessWindows('requires a zero exit from gh, even for a logged-in looking output', async () => {
+  testUnlessWindows('trusts the parsed output over the exit code', async () => {
     await withStubGh(stubGh(LOGGED_IN, 1), async () => {
       const status = await getAuthStatus()
-      expect(status.loggedIn).toBe(false)
-      expect(status.output).toBeUndefined()
-      expect(status.error).toBeTruthy()
+      expect(status.loggedIn).toBe(true)
+      expect(status.output).toContain('Logged in')
+      expect(status.error).toBeUndefined()
     })
+  })
+})
+
+describe('cross-platform installers', () => {
+  test('uses Homebrew on macOS', () => {
+    const [manager] = packageManagers('darwin')
+
+    expect(manager.command).toBe('brew')
+
+    expect(installCommands(manager, 'gh')).toEqual([
+      { command: 'brew', args: ['install', 'gh'] },
+    ])
+  })
+
+  test('prefers winget and falls back to Chocolatey on Windows', () => {
+    const managers = packageManagers('win32')
+
+    expect(managers.map((manager) => manager.command)).toEqual(['winget', 'choco'])
+
+    expect(installCommands(managers[0], 'gh')).toEqual([
+      {
+        command: 'winget',
+        args: [
+          'install',
+          '--source', 'winget',
+          '--accept-source-agreements',
+          '--accept-package-agreements',
+          '--silent',
+          '--id', 'GitHub.cli',
+        ],
+      },
+    ])
+
+    expect(installCommands(managers[1], 'git')).toEqual([
+      { command: 'choco', args: ['install', '-y', 'git'] },
+    ])
+  })
+
+  test('covers the common Linux package managers and their package names', () => {
+    const managers = packageManagers('linux')
+    const byCommand = (command: string) => managers.find((manager) => manager.command === command)
+
+    expect(managers.map((manager) => manager.command)).toEqual([
+      'apt-get', 'dnf', 'yum', 'pacman', 'zypper', 'apk',
+    ])
+
+    expect(installCommands(byCommand('apt-get')!, 'git')).toEqual([
+      { command: 'apt-get', args: ['update'] },
+      { command: 'apt-get', args: ['install', '-y', 'git'] },
+    ])
+
+    expect(installCommands(byCommand('pacman')!, 'gh')).toEqual([
+      { command: 'pacman', args: ['-S', '--noconfirm', 'github-cli'] },
+    ])
+
+    expect(installCommands(byCommand('apk')!, 'gh')).toEqual([
+      { command: 'apk', args: ['add', '--no-cache', 'github-cli'] },
+    ])
+  })
+
+  test('returns no installers for an unsupported platform', () => {
+    expect(packageManagers('aix')).toEqual([])
   })
 })

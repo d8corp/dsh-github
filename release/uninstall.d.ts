@@ -23,11 +23,11 @@
  */
 export declare function profileDeclaresPackage(profileDir: string, packageName?: string): boolean | null;
 /**
- * Delete the plugin directory and the files older releases kept directly in
- * the DSH home. Paths are derived from `DSH_HOME`, never from user input.
+ * Delete the plugin data directory. Paths are derived from `DSH_HOME`, never
+ * from user input.
  *
  * @param env environment to read `DSH_HOME` from.
- * @returns true when at least one artifact was removed.
+ * @returns true when the directory was removed.
  */
 export declare function removePluginArtifacts(env?: NodeJS.ProcessEnv): boolean;
 export interface UninstallCleanupOptions {

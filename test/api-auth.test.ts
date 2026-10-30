@@ -78,6 +78,7 @@ describe('non-loopback API authentication', () => {
 
   test('admits a remote authority with a live DSH session', async () => {
     const seen: unknown[] = []
+
     const response = await callApi({
       host: '192.168.1.10:3080',
       trustedHosts: ['192.168.1.10:3080'],
@@ -98,8 +99,9 @@ describe('non-loopback API authentication', () => {
     expect(seen).toEqual(['192.168.1.10:3080'])
   })
 
-  test('does not require a session on loopback', async () => {
+  test('requires a session on loopback when the connection service is present', async () => {
     let calls = 0
+
     const response = await callApi({
       ctx: {
         connection: {
@@ -112,8 +114,16 @@ describe('non-loopback API authentication', () => {
       },
     })
 
+    expect(response.statusCode).toBe(401)
+    expect(calls).toBe(1)
+  })
+
+  test('admits loopback without a session only when no connection service exists', async () => {
+    const response = await callApi({ ctx: {} })
+
+    // The request reached action dispatch without any verifier call.
     expect(response.statusCode).toBe(400)
-    expect(calls).toBe(0)
+    expect(response.payload.error.message).toMatch(/unknown action/i)
   })
 
   test('keeps the Host/Origin fence in front of the session gate', async () => {

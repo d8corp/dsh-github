@@ -41,9 +41,11 @@ const LOGGED_IN_STATUS = [
  * instead of the stored account for `auth status`.
  *
  * @param loginCode exit code of `gh auth login` (non-zero simulates failure).
+ * @param logoutCode exit code of `gh auth logout`.
+ * @param setupGitCode exit code of `gh auth setup-git`.
  * @returns the stub script body.
  */
-function ghStub (loginCode = 0): string {
+function ghStub (loginCode = 0, logoutCode = 0, setupGitCode = 0): string {
   const tokenGuard = [
     '  if [ -n "$GH_TOKEN" ] || [ -n "$GITHUB_TOKEN" ] || [ -n "$GH_ENTERPRISE_TOKEN" ] || [ -n "$GITHUB_ENTERPRISE_TOKEN" ]; then',
     '    echo "The value of the GH_TOKEN environment variable is being used for authentication." >&2',
@@ -69,10 +71,14 @@ function ghStub (loginCode = 0): string {
     // while the host is still writing raises EPIPE on the child's stdin.
     '  cat > /dev/null',
     '  if [ -n "$GH_STUB_MARKER" ]; then echo "logged-out" > "$GH_STUB_MARKER"; fi',
-    '  exit 0',
+    logoutCode === 0
+      ? '  exit 0'
+      : `  echo "failed to log out of github.com" >&2\n  exit ${logoutCode}`,
     'fi',
     'if [ "$1" = "auth" ] && [ "$2" = "setup-git" ]; then',
-    '  exit 0',
+    setupGitCode === 0
+      ? '  exit 0'
+      : `  echo "failed to configure git" >&2\n  exit ${setupGitCode}`,
     'fi',
     'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then',
     '  if [ -n "$GH_TOKEN" ] || [ -n "$GITHUB_TOKEN" ]; then',
@@ -263,12 +269,32 @@ describe('connect token lifetime', () => {
       expect(readSettings().tokenIssuedAt).toBeNull()
     }))
   })
+
+  testUnlessWindows('rolls the login back when setup-git fails', async () => {
+    await withStubGh(ghStub(0, 0, 1), () => withTokenEnv(async ({ home, keyPath }) => {
+      const marker = join(home, 'logout.marker')
+      process.env.GH_STUB_MARKER = marker
+      stubFetch({ token: 'ghs_installation_token', expires_at: API_EXPIRES_ISO })
+
+      const result = await connect({ appId: '123', installationId: '456', keyPath }, PASSPHRASE)
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/configure git/i)
+      // The login the store already accepted is undone: no half-connected state.
+      expect(readFileSync(marker, 'utf8').trim()).toBe('logged-out')
+      expect(process.env.GH_TOKEN).toBeUndefined()
+      expect(process.env.GITHUB_TOKEN).toBeUndefined()
+      expect(readSettings().tokenIssuedAt).toBeNull()
+      expect(readSettings().tokenExpiresAt).toBeNull()
+    }))
+  })
 })
 
 describe('private key protection', () => {
   testUnlessWindows('connect refuses a wrong or missing passphrase before calling GitHub', async () => {
     await withTokenEnv(async ({ keyPath }) => {
       const fetchMock = stubFetch({ token: 'ghs_installation_token' })
+
       const settings = {
         appId: '123',
         installationId: '456',
@@ -359,6 +385,21 @@ describe('disconnect', () => {
       const onDisk = JSON.parse(readFileSync(join(home, 'dsh-github-app', 'github.json'), 'utf8'))
       expect(onDisk.tokenIssuedAt).toBeNull()
       expect(onDisk.tokenExpiresAt).toBeNull()
+    }))
+  })
+
+  testUnlessWindows('reports a failed logout instead of pretending to disconnect', async () => {
+    await withStubGh(ghStub(0, 1), () => withTokenEnv(async () => {
+      process.env.GH_TOKEN = 'ghs_stale'
+      process.env.GITHUB_TOKEN = 'ghs_stale'
+
+      const result = await disconnect()
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/failed to log out/i)
+      // The plugin's own export is dropped even when gh refuses to log out.
+      expect(process.env.GH_TOKEN).toBeUndefined()
+      expect(process.env.GITHUB_TOKEN).toBeUndefined()
     }))
   })
 })

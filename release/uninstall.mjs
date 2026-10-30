@@ -1,7 +1,7 @@
-import { KEY_ENCRYPTED_FILENAME, KEY_FILENAME, PACKAGE_NAME, SETTINGS_FILENAME } from "./constants.mjs";
+import { PACKAGE_NAME } from "./constants.mjs";
 import { dshHomeDir, pluginDir } from "./settings.mjs";
 import { join, resolve } from "node:path";
-import { existsSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 // src/uninstall.ts
 /**
 * Removes plugin-owned artifacts after the bundle is uninstalled.
@@ -51,40 +51,27 @@ function profileDeclaresPackage(profileDir, packageName = PACKAGE_NAME) {
 	return (Array.isArray(profile.bundles) ? profile.bundles : []).includes(packageName);
 }
 /**
-* Delete the plugin directory and the files older releases kept directly in
-* the DSH home. Paths are derived from `DSH_HOME`, never from user input.
+* Delete the plugin data directory. Paths are derived from `DSH_HOME`, never
+* from user input.
 *
 * @param env environment to read `DSH_HOME` from.
-* @returns true when at least one artifact was removed.
+* @returns true when the directory was removed.
 */
 function removePluginArtifacts(env = process.env) {
 	const home = resolve(dshHomeDir(env));
 	const dir = resolve(pluginDir(env));
-	if (dir !== join(home, "dsh-github")) return false;
-	let removed = false;
+	if (dir !== join(home, "dsh-github-app")) return false;
+	if (!existsSync(dir)) return false;
 	try {
-		if (existsSync(dir)) {
-			rmSync(dir, {
-				recursive: true,
-				force: true
-			});
-			removed = true;
-		}
-		for (const name of [
-			SETTINGS_FILENAME,
-			KEY_ENCRYPTED_FILENAME,
-			KEY_FILENAME
-		]) {
-			const file = join(home, name);
-			if (!existsSync(file)) continue;
-			unlinkSync(file);
-			removed = true;
-		}
+		rmSync(dir, {
+			recursive: true,
+			force: true
+		});
 	} catch (error) {
-		console.warn("[@d8corp/dsh-github] cannot remove plugin data:", error instanceof Error && error.message ? error.message : error);
+		console.warn("[dsh-github-app] cannot remove plugin data:", error instanceof Error && error.message ? error.message : error);
 		return false;
 	}
-	return removed;
+	return true;
 }
 /**
 * Watch the profile for this package's removal and delete plugin artifacts.

@@ -21,7 +21,7 @@ const MIN_N = 4096;
 const MAX_N = 1 << 18;
 const MAX_R = 16;
 const MAX_P = 4;
-const AAD = Buffer.from("dsh-github:private-key:v1", "utf8");
+const AAD = Buffer.from("dsh-github-app:private-key:v1", "utf8");
 function decodeField(value, bytes) {
 	if (typeof value !== "string" || value === "") throw new Error("Malformed key envelope");
 	const buffer = Buffer.from(value, "base64");

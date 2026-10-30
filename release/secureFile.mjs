@@ -1,5 +1,5 @@
 import { dshHomeDir } from "./settings.mjs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { existsSync, realpathSync, unlinkSync } from "node:fs";
 // src/secureFile.ts
 /**
@@ -8,12 +8,19 @@ import { existsSync, realpathSync, unlinkSync } from "node:fs";
 * Deletions are restricted to the harness home so a tampered settings file
 * cannot turn `clearConfig` into arbitrary file removal.
 */
-/** Real path when it exists, otherwise a lexically resolved absolute path. */
+/**
+* Real path when it exists. Missing paths are resolved through their nearest
+* existing ancestor, so symlinked parents (`/var` → `/private/var` on macOS)
+* still compare correctly against a real home directory.
+*/
 function realOrResolved(path) {
+	const resolved = resolve(path);
 	try {
-		return realpathSync.native(path);
+		return realpathSync.native(resolved);
 	} catch {
-		return resolve(path);
+		const parent = dirname(resolved);
+		if (parent === resolved) return resolved;
+		return join(realOrResolved(parent), basename(resolved));
 	}
 }
 /**

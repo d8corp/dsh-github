@@ -1,6 +1,6 @@
 import { dirname } from "node:path";
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 // src/atomicFile.ts
 /**
 * Atomic private-file writes shared by settings and key storage.

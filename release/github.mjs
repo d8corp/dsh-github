@@ -3,8 +3,8 @@ import { passphraseError } from "./passphrase.mjs";
 import { decryptPrivateKey } from "./keyCrypto.mjs";
 import { parseTimestamp } from "./time.mjs";
 import { readSettings, writeSettings } from "./settings.mjs";
-import { existsSync, readFileSync } from "node:fs";
 import { createPrivateKey, createSign } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 // src/github.ts
 function run(command, args, options = {}) {
@@ -182,7 +182,7 @@ async function getAuthStatus(hostname = DEFAULT_HOSTNAME) {
 		hostname
 	]);
 	const output = `${result.stdout}\n${result.stderr}`.trim();
-	const loggedIn = result.code === 0 && isLoggedInOutput(output);
+	const loggedIn = isLoggedInOutput(output);
 	const gitCfg = await run("git", [
 		"config",
 		"--global",
@@ -197,45 +197,174 @@ async function getAuthStatus(hostname = DEFAULT_HOSTNAME) {
 		error: loggedIn ? void 0 : output || "gh auth status failed"
 	};
 }
-async function aptInstall(name) {
-	const update = await run("apt-get", ["update"], { timeout: 3e5 });
-	if (update.code !== 0) return {
-		ok: false,
-		error: (update.stderr || update.stdout || "apt-get update failed").trim()
+/**
+* Package managers tried in order, per platform.
+*
+* `winget` is preferred on Windows and Chocolatey is the fallback; on Linux the
+* order covers Debian/Ubuntu, Fedora/RHEL, Arch and Alpine/openSUSE.
+*/
+const PACKAGE_MANAGERS = {
+	darwin: [{
+		command: "brew",
+		probe: ["--version"],
+		update: null,
+		install: ["install"]
+	}],
+	win32: [{
+		command: "winget",
+		probe: ["--version"],
+		update: null,
+		install: [
+			"install",
+			"--source",
+			"winget",
+			"--accept-source-agreements",
+			"--accept-package-agreements",
+			"--silent",
+			"--id"
+		],
+		packageName: {
+			gh: "GitHub.cli",
+			git: "Git.Git"
+		}
+	}, {
+		command: "choco",
+		probe: ["--version"],
+		update: null,
+		install: ["install", "-y"]
+	}],
+	linux: [
+		{
+			command: "apt-get",
+			probe: ["--version"],
+			update: ["update"],
+			install: ["install", "-y"]
+		},
+		{
+			command: "dnf",
+			probe: ["--version"],
+			update: null,
+			install: ["install", "-y"]
+		},
+		{
+			command: "yum",
+			probe: ["--version"],
+			update: null,
+			install: ["install", "-y"]
+		},
+		{
+			command: "pacman",
+			probe: ["--version"],
+			update: null,
+			install: ["-S", "--noconfirm"],
+			packageName: { gh: "github-cli" }
+		},
+		{
+			command: "zypper",
+			probe: ["--version"],
+			update: null,
+			install: ["--non-interactive", "install"]
+		},
+		{
+			command: "apk",
+			probe: ["--version"],
+			update: null,
+			install: ["add", "--no-cache"],
+			packageName: { gh: "github-cli" }
+		}
+	]
+};
+/**
+* Package managers available for a platform, in probe order.
+*
+* @param platform target platform; defaults to the host.
+* @returns the manager list, empty when the platform has no installer.
+*/
+function packageManagers(platform = process.platform) {
+	return PACKAGE_MANAGERS[platform] ?? [];
+}
+/**
+* Commands needed to install one tool with a known package manager.
+*
+* @param manager manager to use.
+* @param tool tool to install.
+* @returns ordered commands; an install failure aborts the sequence.
+*/
+function installCommands(manager, tool) {
+	const steps = [];
+	if (manager.update !== null) steps.push({
+		command: manager.command,
+		args: manager.update
+	});
+	steps.push({
+		command: manager.command,
+		args: [...manager.install, manager.packageName?.[tool] ?? tool]
+	});
+	return steps;
+}
+/**
+* Probe the platform's managers in order and return the first usable one.
+*
+* @param platform target platform.
+* @returns the manager, or null when none answers.
+*/
+async function findPackageManager(platform = process.platform) {
+	for (const manager of packageManagers(platform)) if ((await run(manager.command, manager.probe, { timeout: 15e3 })).code === 0) return manager;
+	return null;
+}
+/**
+* Human-readable fallback hint for a platform without an automatic installer.
+*
+* @param tool tool the user wanted to install.
+* @returns a short instruction.
+*/
+function installHint(tool) {
+	if (process.platform === "darwin") return `Install Homebrew (https://brew.sh) and retry, or download ${tool} from https://cli.github.com`;
+	if (process.platform === "win32") return `Install winget or Chocolatey and retry, or download ${tool} from https://cli.github.com`;
+	return `Install a supported package manager (apt, dnf, yum, pacman, zypper or apk), or see https://github.com/cli/cli#installation for ${tool}`;
+}
+/**
+* Install one missing tool with the first available platform manager.
+*
+* @param tool `gh` or `git`.
+* @returns the install outcome; `skipped` when the tool was already present.
+*/
+async function installTool(tool) {
+	const before = tool === "gh" ? await getGhInfo() : await getGitInfo();
+	if (before.installed) return {
+		ok: true,
+		version: before.version,
+		skipped: true
 	};
-	const install = await run("apt-get", [
-		"install",
-		"-y",
-		name
-	], { timeout: 3e5 });
-	if (install.code !== 0) return {
+	const managers = packageManagers();
+	const manager = await findPackageManager();
+	if (manager === null) return {
 		ok: false,
-		error: (install.stderr || install.stdout || `apt-get install ${name} failed`).trim()
+		error: managers.length === 0 ? `Automatic install is not supported on ${process.platform}. ${installHint(tool)}` : `No supported package manager found. ${installHint(tool)}`
 	};
-	const after = name === "gh" ? await getGhInfo() : await getGitInfo();
+	for (const step of installCommands(manager, tool)) {
+		const result = await run(step.command, step.args, { timeout: 3e5 });
+		if (result.code !== 0) {
+			const output = (result.stderr || result.stdout || `${step.command} ${step.args.join(" ")} failed`).trim();
+			return {
+				ok: false,
+				error: `${output}\n${manager.command === "apt-get" && tool === "gh" && /unable to locate|has no installation candidate/i.test(output) ? "On Debian/Ubuntu, gh needs the GitHub CLI repository: https://github.com/cli/cli/blob/trunk/docs/install_linux.md" : installHint(tool)}`
+			};
+		}
+	}
+	const after = tool === "gh" ? await getGhInfo() : await getGitInfo();
 	return {
 		ok: after.installed,
 		version: after.version,
-		error: after.installed ? void 0 : `${name} still not found after install`
+		error: after.installed ? void 0 : `${tool} still not found after install`
 	};
 }
 async function installGit() {
-	const info = await getGitInfo();
-	if (info.installed) return {
-		ok: true,
-		version: info.version,
-		skipped: true
-	};
-	return aptInstall("git");
+	return installTool("git");
 }
 async function installGh() {
-	const ghBefore = await getGhInfo();
-	const ghResult = ghBefore.installed ? {
-		ok: true,
-		version: ghBefore.version,
-		skipped: true
-	} : await aptInstall("gh");
-	const gitResult = await installGit();
+	const ghResult = await installTool("gh");
+	const gitResult = await installTool("git");
 	const ok = ghResult.ok && gitResult.ok;
 	return {
 		ok,
@@ -331,15 +460,10 @@ async function fetchInstallationToken(jwt, installationId, hostname) {
 * @returns the connection outcome and refreshed auth status.
 */
 async function connect(settings, passphrase) {
-	const s = settings || {};
-	const { appId, installationId, keyPath } = s;
+	const { appId, installationId, keyPath } = settings || {};
 	if (!appId || !installationId || !keyPath) return {
 		ok: false,
 		error: "Missing appId, installationId or key file"
-	};
-	if (s.keyEncrypted !== true) return {
-		ok: false,
-		error: "Private key is stored unencrypted. Encrypt it with a passphrase first."
 	};
 	const invalidPassphrase = passphraseError(passphrase);
 	if (invalidPassphrase !== null) return {
@@ -411,21 +535,37 @@ async function connect(settings, passphrase) {
 		});
 	} catch {}
 	const setup = await runGhAuth(["auth", "setup-git"], { timeout: 12e4 });
-	if (setup.code !== 0) return {
-		ok: false,
-		error: (setup.stderr || setup.stdout || "gh auth setup-git failed").trim(),
-		partial: true
-	};
+	if (setup.code !== 0) {
+		const msg = (setup.stderr || setup.stdout || "gh auth setup-git failed").trim();
+		await rollbackLogin();
+		return {
+			ok: false,
+			error: msg
+		};
+	}
 	process.env.GH_TOKEN = token;
 	process.env.GITHUB_TOKEN = token;
 	const auth = await getAuthStatus();
+	if (!auth.loggedIn) {
+		const msg = auth.error || "gh auth status did not confirm the login";
+		await rollbackLogin();
+		return {
+			ok: false,
+			error: msg
+		};
+	}
 	return {
-		ok: auth.loggedIn,
-		auth,
-		error: auth.loggedIn ? void 0 : auth.error
+		ok: true,
+		auth
 	};
 }
-async function disconnect() {
+/**
+* Undo a login that was written to gh's credential store when a later step of
+* {@link connect} failed, so the reported state matches the store.
+*
+* @returns nothing; failures are best-effort.
+*/
+async function rollbackLogin() {
 	await runGhAuth([
 		"auth",
 		"logout",
@@ -444,7 +584,32 @@ async function disconnect() {
 			tokenExpiresAt: null
 		});
 	} catch {}
-	return { ok: true };
+}
+async function disconnect() {
+	const result = await runGhAuth([
+		"auth",
+		"logout",
+		"--hostname",
+		DEFAULT_HOSTNAME
+	], {
+		timeout: 6e4,
+		input: "y\n"
+	});
+	const output = `${result.stdout}\n${result.stderr}`.trim();
+	const loggedOut = result.code === 0 || /not logged in/i.test(output);
+	delete process.env.GH_TOKEN;
+	delete process.env.GITHUB_TOKEN;
+	try {
+		writeSettings({
+			...readSettings(),
+			tokenIssuedAt: null,
+			tokenExpiresAt: null
+		});
+	} catch {}
+	return loggedOut ? { ok: true } : {
+		ok: false,
+		error: output || "gh auth logout failed"
+	};
 }
 async function getGitIdentity() {
 	const nameResult = await run("git", [
@@ -491,4 +656,4 @@ async function setGitIdentity(name, email) {
 	]);
 	return getGitIdentity();
 }
-export { connect, disconnect, getAuthStatus, getGhInfo, getGitIdentity, getGitInfo, installGh, installGit, isLoggedInOutput, setGitIdentity };
+export { connect, disconnect, getAuthStatus, getGhInfo, getGitIdentity, getGitInfo, installCommands, installGh, installGit, isLoggedInOutput, packageManagers, setGitIdentity };

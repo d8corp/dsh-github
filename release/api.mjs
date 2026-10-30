@@ -8,7 +8,6 @@ import { encryptedKeyPath, keyFileExists, readSettings, writeSettings } from "./
 import { connect, disconnect, getAuthStatus, getGhInfo, getGitIdentity, getGitInfo, installGh, installGit, setGitIdentity } from "./github.mjs";
 import { isInsideDshHome, removeSecretFile } from "./secureFile.mjs";
 import { errorMessage } from "./utils/errorMessage.mjs";
-import { existsSync, readFileSync } from "node:fs";
 // src/api.ts
 /**
 * Resolve the connection service for browser-session verification.
@@ -30,7 +29,7 @@ function resolveConnection(ctx) {
 	} catch {}
 }
 /**
-* Require a live DSH browser session for a non-loopback request.
+* Require a live DSH browser session (or API credential) for a request.
 *
 * @param ctx plugin context.
 * @param req incoming request.
@@ -119,8 +118,7 @@ async function statusPayload() {
 			gitUserName: settings.gitUserName,
 			gitUserEmail: settings.gitUserEmail,
 			keyFileName: settings.keyFileName,
-			hasKey: keyFileExists(settings),
-			keyEncrypted: settings.keyEncrypted
+			hasKey: keyFileExists(settings)
 		},
 		auth,
 		token: {
@@ -138,7 +136,7 @@ function createApiHandler(ctx, { trustedHosts }) {
 			fail(res, 403, "Untrusted request");
 			return;
 		}
-		if (!isLoopbackRequest(req)) {
+		if (resolveConnection(ctx) !== void 0 || !isLoopbackRequest(req)) {
 			const rejection = sessionRejection(ctx, req);
 			if (rejection !== void 0) {
 				fail(res, rejection, rejection === 401 ? "Authentication required: open the DSH Web UI from its printed URL." : "Untrusted request");
@@ -196,7 +194,6 @@ function createApiHandler(ctx, { trustedHosts }) {
 							return;
 						}
 						patch.keyPath = stored.keyPath;
-						patch.keyEncrypted = true;
 						uploadedName = typeof payload.pemFileName === "string" ? payload.pemFileName.trim() : "";
 					}
 					const latest = readSettings();
@@ -207,50 +204,7 @@ function createApiHandler(ctx, { trustedHosts }) {
 						...patch
 					});
 					if (replacedKeyPath !== null) removeSecretFile(replacedKeyPath);
-					if ("gitUserName" in patch || "gitUserEmail" in patch) await setGitIdentity(next.gitUserName, next.gitUserEmail);
-					ok(res, {
-						settings: next,
-						status: await statusPayload()
-					});
-					break;
-				}
-				case "encryptKey": {
-					const current = readSettings();
-					if (!current.keyPath || !existsSync(current.keyPath)) {
-						fail(res, 400, "No private key to encrypt");
-						break;
-					}
-					if (current.keyEncrypted) {
-						ok(res, {
-							settings: current,
-							status: await statusPayload()
-						});
-						break;
-					}
-					if (!isInsideDshHome(current.keyPath)) {
-						fail(res, 400, "Private key is outside the DSH home; upload it again to encrypt.");
-						break;
-					}
-					let pemText;
-					try {
-						pemText = readFileSync(current.keyPath, "utf8");
-					} catch {
-						fail(res, 400, "Cannot read private key");
-						break;
-					}
-					const stored = await storeEncryptedKey(pemText, payload.passphrase).finally(() => {
-						pemText = "";
-					});
-					if (!stored.ok) {
-						fail(res, stored.status, stored.message);
-						break;
-					}
-					const next = writeSettings({
-						...readSettings(),
-						keyPath: stored.keyPath,
-						keyEncrypted: true
-					});
-					removeSecretFile(current.keyPath);
+					if (next.gitUserName !== latest.gitUserName || next.gitUserEmail !== latest.gitUserEmail) await setGitIdentity(next.gitUserName, next.gitUserEmail);
 					ok(res, {
 						settings: next,
 						status: await statusPayload()
@@ -258,6 +212,7 @@ function createApiHandler(ctx, { trustedHosts }) {
 					break;
 				}
 				case "clearConfig": {
+					await disconnect();
 					const current = readSettings();
 					removeSecretFile(current.keyPath);
 					removeSecretFile(encryptedKeyPath());
@@ -265,8 +220,7 @@ function createApiHandler(ctx, { trustedHosts }) {
 						appId: "",
 						installationId: "",
 						keyPath: null,
-						keyFileName: null,
-						keyEncrypted: false
+						keyFileName: null
 					});
 					ok(res, await statusPayload());
 					break;
@@ -279,10 +233,15 @@ function createApiHandler(ctx, { trustedHosts }) {
 					});
 					break;
 				}
-				case "disconnect":
-					await disconnect();
+				case "disconnect": {
+					const result = await disconnect();
+					if (!result.ok) {
+						fail(res, 500, result.error || "Disconnect failed");
+						return;
+					}
 					ok(res, await statusPayload());
 					break;
+				}
 				case "test":
 					ok(res, {
 						auth: await getAuthStatus(),

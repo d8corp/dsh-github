@@ -22,6 +22,33 @@ interface GithubMessage {
   text: string
 }
 
+/** Text fields that are saved automatically. */
+interface GithubForm {
+  appId: string
+  installationId: string
+  gitUserName: string
+  gitUserEmail: string
+}
+
+/**
+ * Fields whose value differs from the last saved snapshot.
+ *
+ * @param form current form values.
+ * @param saved values known to be persisted, or null before the first load.
+ * @returns a patch containing only the edited fields.
+ */
+function formPatch (form: GithubForm, saved: GithubForm | null): Partial<GithubForm> {
+  const patch: Partial<GithubForm> = {}
+
+  if (saved === null) return patch
+  if (form.appId !== saved.appId) patch.appId = form.appId
+  if (form.installationId !== saved.installationId) patch.installationId = form.installationId
+  if (form.gitUserName !== saved.gitUserName) patch.gitUserName = form.gitUserName
+  if (form.gitUserEmail !== saved.gitUserEmail) patch.gitUserEmail = form.gitUserEmail
+
+  return patch
+}
+
 function readFileAsBase64 (file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -50,15 +77,31 @@ export function Settings () {
   const [gitUserEmail, setGitUserEmail] = useState('')
   const [passphrase, setPassphrase] = useState('')
   const loadedRef = useRef(false)
+  const savedRef = useRef<GithubForm | null>(null)
+
+  function currentForm (): GithubForm {
+    return { appId, installationId, gitUserName, gitUserEmail }
+  }
 
   async function refresh (): Promise<void> {
     try {
       const value = await callApi('status') as StatusPayload | null
+      const config = value && value.config
+      const identity = value && value.gitIdentity
+
+      const next: GithubForm = {
+        appId: (config && config.appId) || '',
+        installationId: (config && config.installationId) || '',
+        gitUserName: (config && config.gitUserName) || (identity && identity.name) || '',
+        gitUserEmail: (config && config.gitUserEmail) || (identity && identity.email) || '',
+      }
+
       setStatus(value)
-      setAppId((value && value.config && value.config.appId) || '')
-      setInstallationId((value && value.config && value.config.installationId) || '')
-      setGitUserName((value && value.config && value.config.gitUserName) || (value && value.gitIdentity && value.gitIdentity.name) || '')
-      setGitUserEmail((value && value.config && value.config.gitUserEmail) || (value && value.gitIdentity && value.gitIdentity.email) || '')
+      setAppId(next.appId)
+      setInstallationId(next.installationId)
+      setGitUserName(next.gitUserName)
+      setGitUserEmail(next.gitUserEmail)
+      savedRef.current = next
       loadedRef.current = true
     } catch (error) {
       setMessage({ kind: 'error', text: errorMessage(error, 'Failed to load status.') })
@@ -71,13 +114,21 @@ export function Settings () {
     refresh()
   }, [])
 
-  // auto-save text fields
+  // Auto-save edited fields only. Sending the whole form rewrote unrelated
+  // server state — notably the global git identity — on every change.
   useEffect(() => {
-    if (!loadedRef.current) return
+    const saved = savedRef.current
+
+    if (!loadedRef.current || saved === null) return
+
+    const patch = formPatch(currentForm(), saved)
+
+    if (Object.keys(patch).length === 0) return
 
     const timer = setTimeout(async () => {
       try {
-        await callApi('saveConfig', { appId, installationId, gitUserName, gitUserEmail })
+        await callApi('saveConfig', patch)
+        savedRef.current = { ...saved, ...patch }
       } catch (error) {
         setMessage({ kind: 'error', text: errorMessage(error, 'Save failed.') })
       }
@@ -85,6 +136,20 @@ export function Settings () {
 
     return () => clearTimeout(timer)
   }, [appId, installationId, gitUserName, gitUserEmail])
+
+  /** Persist edits that are still waiting for the auto-save debounce. */
+  async function savePendingChanges (): Promise<void> {
+    const saved = savedRef.current
+
+    if (saved === null) return
+
+    const patch = formPatch(currentForm(), saved)
+
+    if (Object.keys(patch).length === 0) return
+
+    await callApi('saveConfig', patch)
+    savedRef.current = { ...saved, ...patch }
+  }
 
   async function withBusy (fn: () => Promise<void>): Promise<void> {
     setBusy(true)
@@ -136,8 +201,7 @@ export function Settings () {
       const base64 = await readFileAsBase64(file)
 
       await callApi('saveConfig', {
-        appId,
-        installationId,
+        ...formPatch(currentForm(), savedRef.current),
         pemBase64: base64,
         pemFileName: file.name,
         passphrase,
@@ -153,6 +217,10 @@ export function Settings () {
     if (!requirePassphrase()) return
 
     await withBusy(async () => {
+      // The debounced auto-save may not have run yet; connect reads the stored
+      // settings, so persist pending edits before asking for a token.
+      await savePendingChanges()
+
       const result = await callApi('connect', { passphrase }) as { connect?: GithubActionResult } | null
 
       if (result && result.connect && result.connect.ok === false) {

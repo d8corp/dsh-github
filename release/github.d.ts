@@ -34,7 +34,6 @@ export interface AuthStatus {
 export interface ConnectResult {
     ok: boolean;
     error?: string;
-    partial?: boolean;
     auth?: AuthStatus;
 }
 export declare function getGhInfo(): Promise<ToolStatus>;
@@ -56,6 +55,45 @@ export declare function getGitInfo(): Promise<ToolStatus>;
  */
 export declare function isLoggedInOutput(output: unknown): boolean;
 export declare function getAuthStatus(hostname?: string): Promise<AuthStatus>;
+/** Tool the settings section can install automatically. */
+export type InstallableTool = 'gh' | 'git';
+/**
+ * One supported package manager and the commands that install a tool with it.
+ *
+ * `install` is a prefix: the resolved package name is appended as the last
+ * argument, so managers that put the name after flags (`winget --id`) can use
+ * the same shape.
+ */
+export interface PackageManager {
+    /** Executable to spawn. */
+    command: string;
+    /** Arguments that exit 0 when the manager is usable. */
+    probe: string[];
+    /** Arguments that refresh the package index, or null when not needed. */
+    update: string[] | null;
+    /** Arguments to install a package (package name appended). */
+    install: string[];
+    /** Package name when it differs from the tool name. */
+    packageName?: Partial<Record<InstallableTool, string>>;
+}
+/**
+ * Package managers available for a platform, in probe order.
+ *
+ * @param platform target platform; defaults to the host.
+ * @returns the manager list, empty when the platform has no installer.
+ */
+export declare function packageManagers(platform?: NodeJS.Platform): PackageManager[];
+/**
+ * Commands needed to install one tool with a known package manager.
+ *
+ * @param manager manager to use.
+ * @param tool tool to install.
+ * @returns ordered commands; an install failure aborts the sequence.
+ */
+export declare function installCommands(manager: PackageManager, tool: InstallableTool): Array<{
+    command: string;
+    args: string[];
+}>;
 export declare function installGit(): Promise<InstallResult>;
 export declare function installGh(): Promise<InstallGhResult>;
 /**
@@ -70,8 +108,10 @@ export declare function installGh(): Promise<InstallGhResult>;
  * @returns the connection outcome and refreshed auth status.
  */
 export declare function connect(settings?: Partial<GithubSettings> | null, passphrase?: unknown): Promise<ConnectResult>;
-export declare function disconnect(): Promise<{
-    ok: true;
-}>;
+export interface DisconnectResult {
+    ok: boolean;
+    error?: string;
+}
+export declare function disconnect(): Promise<DisconnectResult>;
 export declare function getGitIdentity(): Promise<GitIdentity>;
 export declare function setGitIdentity(name: unknown, email: unknown): Promise<GitIdentity>;

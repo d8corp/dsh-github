@@ -44,7 +44,7 @@ export type ApiHandler = (req: IncomingMessage, res: ServerResponse) => Promise<
 /**
  * The slice of the DSH `connection` service this plugin relies on. It is
  * looked up lazily so the plugin keeps loading in profiles that have no
- * browser connection, where non-loopback requests then fail closed.
+ * browser connection, where only loopback requests are accepted.
  */
 interface ConnectionLike {
   requestRejection?: (request: IncomingMessage) => unknown
@@ -85,7 +85,7 @@ function resolveConnection (ctx: unknown): ConnectionLike | undefined {
 }
 
 /**
- * Require a live DSH browser session for a non-loopback request.
+ * Require a live DSH browser session (or API credential) for a request.
  *
  * @param ctx plugin context.
  * @param req incoming request.
@@ -186,10 +186,14 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
       return
     }
 
-    // Loopback is the local trust boundary. Every remote authority must also
-    // present a live DSH browser session: Host/Origin checks alone let anyone
-    // who can reach the port replace the key or wipe the configuration.
-    if (!isLoopbackRequest(req)) {
+    // The DSH connection service is the authority whenever it is available:
+    // it applies the Host/Origin fence and then requires a browser session or
+    // an API credential for every request, loopback included. Skipping it for
+    // a "loopback" Host would be a hole, because the Host header is supplied
+    // by the client: a remote caller could send `Host: 127.0.0.1` and reach
+    // every action unauthenticated. Only a profile without the service
+    // (headless) falls back to loopback as the local trust boundary.
+    if (resolveConnection(ctx) !== undefined || !isLoopbackRequest(req)) {
       const rejection = sessionRejection(ctx, req)
 
       if (rejection !== undefined) {
@@ -298,7 +302,10 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
 
           if (replacedKeyPath !== null) removeSecretFile(replacedKeyPath)
 
-          if ('gitUserName' in patch || 'gitUserEmail' in patch) {
+          // Touch the shared global git config only when the stored identity
+          // actually changed. Auto-save used to rewrite it on every unrelated
+          // edit, including merely opening the settings section.
+          if (next.gitUserName !== latest.gitUserName || next.gitUserEmail !== latest.gitUserEmail) {
             await setGitIdentity(next.gitUserName, next.gitUserEmail)
           }
 
@@ -307,6 +314,12 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
         }
 
         case 'clearConfig': {
+          // Clearing the configuration must also end the session. Without the
+          // logout the agent keeps using a token whose key the user just
+          // deleted. Logout failures are not fatal here: the user asked to
+          // drop the local configuration either way.
+          await disconnect()
+
           const current = readSettings()
 
           removeSecretFile(current.keyPath)
@@ -325,7 +338,14 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
         }
 
         case 'disconnect': {
-          await disconnect()
+          const result = await disconnect()
+
+          if (!result.ok) {
+            fail(res, 500, result.error || 'Disconnect failed')
+
+            return
+          }
+
           ok(res, await statusPayload())
           break
         }

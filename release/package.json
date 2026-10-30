@@ -1,6 +1,6 @@
 {
-  "name": "@d8corp/dsh-github",
-  "version": "0.0.3",
+  "name": "dsh-github-app",
+  "version": "0.0.1",
   "description": "GitHub CLI (gh) integration for DSH: configure a GitHub App and authenticate gh for git operations.",
   "type": "module",
   "main": "index.mjs",
@@ -14,7 +14,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/d8corp/dsh-github.git"
+    "url": "https://github.com/d8corp/dsh-github-app.git"
   },
   "keywords": [
     "DeepSeek",
@@ -23,9 +23,9 @@
     "plugin"
   ],
   "bugs": {
-    "url": "https://github.com/d8corp/dsh-github/issues"
+    "url": "https://github.com/d8corp/dsh-github-app/issues"
   },
-  "homepage": "https://github.com/d8corp/dsh-github",
+  "homepage": "https://github.com/d8corp/dsh-github-app",
   "engines": {
     "node": ">=22"
   },

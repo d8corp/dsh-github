@@ -49,7 +49,6 @@ export interface AuthStatus {
 export interface ConnectResult {
   ok: boolean
   error?: string
-  partial?: boolean
   auth?: AuthStatus
 }
 
@@ -238,7 +237,11 @@ export function isLoggedInOutput (output: unknown): boolean {
 export async function getAuthStatus (hostname = DEFAULT_HOSTNAME): Promise<AuthStatus> {
   const result = await runGhAuth(['auth', 'status', '--hostname', hostname])
   const output = `${result.stdout}\n${result.stderr}`.trim()
-  const loggedIn = result.code === 0 && isLoggedInOutput(output)
+
+  // `gh auth status` exits 1 when *any* account on the host has issues, even
+  // an inactive one, so the exit code says nothing about the active account.
+  // The parsed output does, and it also covers the plain "not logged in" case.
+  const loggedIn = isLoggedInOutput(output)
 
   // git credential helper configured by `gh auth setup-git`
   const gitCfg = await run('git', ['config', '--global', '--get', `credential.https://${hostname}.helper`])
@@ -253,39 +256,190 @@ export async function getAuthStatus (hostname = DEFAULT_HOSTNAME): Promise<AuthS
   }
 }
 
-async function aptInstall (name: 'gh' | 'git'): Promise<InstallResult> {
-  const update = await run('apt-get', ['update'], { timeout: 300000 })
+/** Tool the settings section can install automatically. */
+export type InstallableTool = 'gh' | 'git'
 
-  if (update.code !== 0) {
-    return { ok: false, error: (update.stderr || update.stdout || 'apt-get update failed').trim() }
+/**
+ * One supported package manager and the commands that install a tool with it.
+ *
+ * `install` is a prefix: the resolved package name is appended as the last
+ * argument, so managers that put the name after flags (`winget --id`) can use
+ * the same shape.
+ */
+export interface PackageManager {
+  /** Executable to spawn. */
+  command: string
+  /** Arguments that exit 0 when the manager is usable. */
+  probe: string[]
+  /** Arguments that refresh the package index, or null when not needed. */
+  update: string[] | null
+  /** Arguments to install a package (package name appended). */
+  install: string[]
+  /** Package name when it differs from the tool name. */
+  packageName?: Partial<Record<InstallableTool, string>>
+}
+
+/**
+ * Package managers tried in order, per platform.
+ *
+ * `winget` is preferred on Windows and Chocolatey is the fallback; on Linux the
+ * order covers Debian/Ubuntu, Fedora/RHEL, Arch and Alpine/openSUSE.
+ */
+const PACKAGE_MANAGERS: Partial<Record<NodeJS.Platform, PackageManager[]>> = {
+  darwin: [
+    { command: 'brew', probe: ['--version'], update: null, install: ['install'] },
+  ],
+  win32: [
+    {
+      command: 'winget',
+      probe: ['--version'],
+      update: null,
+      install: [
+        'install',
+        '--source', 'winget',
+        '--accept-source-agreements',
+        '--accept-package-agreements',
+        '--silent',
+        '--id',
+      ],
+      packageName: { gh: 'GitHub.cli', git: 'Git.Git' },
+    },
+    { command: 'choco', probe: ['--version'], update: null, install: ['install', '-y'] },
+  ],
+  linux: [
+    {
+      command: 'apt-get',
+      probe: ['--version'],
+      update: ['update'],
+      install: ['install', '-y'],
+    },
+    { command: 'dnf', probe: ['--version'], update: null, install: ['install', '-y'] },
+    { command: 'yum', probe: ['--version'], update: null, install: ['install', '-y'] },
+    { command: 'pacman', probe: ['--version'], update: null, install: ['-S', '--noconfirm'], packageName: { gh: 'github-cli' } },
+    { command: 'zypper', probe: ['--version'], update: null, install: ['--non-interactive', 'install'] },
+    { command: 'apk', probe: ['--version'], update: null, install: ['add', '--no-cache'], packageName: { gh: 'github-cli' } },
+  ],
+}
+
+/**
+ * Package managers available for a platform, in probe order.
+ *
+ * @param platform target platform; defaults to the host.
+ * @returns the manager list, empty when the platform has no installer.
+ */
+export function packageManagers (platform: NodeJS.Platform = process.platform): PackageManager[] {
+  return PACKAGE_MANAGERS[platform] ?? []
+}
+
+/**
+ * Commands needed to install one tool with a known package manager.
+ *
+ * @param manager manager to use.
+ * @param tool tool to install.
+ * @returns ordered commands; an install failure aborts the sequence.
+ */
+export function installCommands (manager: PackageManager, tool: InstallableTool): Array<{ command: string, args: string[] }> {
+  const steps: Array<{ command: string, args: string[] }> = []
+
+  if (manager.update !== null) steps.push({ command: manager.command, args: manager.update })
+
+  steps.push({
+    command: manager.command,
+    args: [...manager.install, manager.packageName?.[tool] ?? tool],
+  })
+
+  return steps
+}
+
+/**
+ * Probe the platform's managers in order and return the first usable one.
+ *
+ * @param platform target platform.
+ * @returns the manager, or null when none answers.
+ */
+async function findPackageManager (platform: NodeJS.Platform = process.platform): Promise<PackageManager | null> {
+  for (const manager of packageManagers(platform)) {
+    const probe = await run(manager.command, manager.probe, { timeout: 15000 })
+
+    if (probe.code === 0) return manager
   }
 
-  const install = await run('apt-get', ['install', '-y', name], { timeout: 300000 })
+  return null
+}
 
-  if (install.code !== 0) {
-    return { ok: false, error: (install.stderr || install.stdout || `apt-get install ${name} failed`).trim() }
+/**
+ * Human-readable fallback hint for a platform without an automatic installer.
+ *
+ * @param tool tool the user wanted to install.
+ * @returns a short instruction.
+ */
+function installHint (tool: InstallableTool): string {
+  if (process.platform === 'darwin') {
+    return `Install Homebrew (https://brew.sh) and retry, or download ${tool} from https://cli.github.com`
   }
 
-  const after = name === 'gh' ? await getGhInfo() : await getGitInfo()
+  if (process.platform === 'win32') {
+    return `Install winget or Chocolatey and retry, or download ${tool} from https://cli.github.com`
+  }
 
-  return { ok: after.installed, version: after.version, error: after.installed ? undefined : `${name} still not found after install` }
+  return `Install a supported package manager (apt, dnf, yum, pacman, zypper or apk), or see https://github.com/cli/cli#installation for ${tool}`
+}
+
+/**
+ * Install one missing tool with the first available platform manager.
+ *
+ * @param tool `gh` or `git`.
+ * @returns the install outcome; `skipped` when the tool was already present.
+ */
+async function installTool (tool: InstallableTool): Promise<InstallResult> {
+  const before = tool === 'gh' ? await getGhInfo() : await getGitInfo()
+
+  if (before.installed) return { ok: true, version: before.version, skipped: true }
+
+  const managers = packageManagers()
+  const manager = await findPackageManager()
+
+  if (manager === null) {
+    return {
+      ok: false,
+      error: managers.length === 0
+        ? `Automatic install is not supported on ${process.platform}. ${installHint(tool)}`
+        : `No supported package manager found. ${installHint(tool)}`,
+    }
+  }
+
+  for (const step of installCommands(manager, tool)) {
+    const result = await run(step.command, step.args, { timeout: 300000 })
+
+    if (result.code !== 0) {
+      const output = (result.stderr || result.stdout || `${step.command} ${step.args.join(' ')} failed`).trim()
+
+      // Debian/Ubuntu keep gh out of the default repositories, so a plain
+      // "unable to locate package" deserves the official instruction.
+      const hint = manager.command === 'apt-get' && tool === 'gh' && /unable to locate|has no installation candidate/i.test(output)
+        ? 'On Debian/Ubuntu, gh needs the GitHub CLI repository: https://github.com/cli/cli/blob/trunk/docs/install_linux.md'
+        : installHint(tool)
+
+      return { ok: false, error: `${output}\n${hint}` }
+    }
+  }
+
+  const after = tool === 'gh' ? await getGhInfo() : await getGitInfo()
+
+  return {
+    ok: after.installed,
+    version: after.version,
+    error: after.installed ? undefined : `${tool} still not found after install`,
+  }
 }
 
 export async function installGit (): Promise<InstallResult> {
-  const info = await getGitInfo()
-  if (info.installed) return { ok: true, version: info.version, skipped: true }
-
-  return aptInstall('git')
+  return installTool('git')
 }
 
 export async function installGh (): Promise<InstallGhResult> {
-  const ghBefore = await getGhInfo()
-
-  const ghResult: InstallResult = ghBefore.installed
-    ? { ok: true, version: ghBefore.version, skipped: true }
-    : await aptInstall('gh')
-
-  const gitResult = await installGit()
+  const ghResult = await installTool('gh')
+  const gitResult = await installTool('git')
   const ok = ghResult.ok && gitResult.ok
 
   return {
@@ -467,7 +621,11 @@ export async function connect (settings?: Partial<GithubSettings> | null, passph
   if (setup.code !== 0) {
     const msg = (setup.stderr || setup.stdout || 'gh auth setup-git failed').trim()
 
-    return { ok: false, error: msg, partial: true }
+    // `gh auth login` already wrote credentials, so leaving them behind would
+    // report a failure while the store says "connected". Undo it instead.
+    await rollbackLogin()
+
+    return { ok: false, error: msg }
   }
 
   process.env.GH_TOKEN = token
@@ -475,11 +633,51 @@ export async function connect (settings?: Partial<GithubSettings> | null, passph
 
   const auth = await getAuthStatus()
 
-  return { ok: auth.loggedIn, auth, error: auth.loggedIn ? undefined : auth.error }
+  if (!auth.loggedIn) {
+    const msg = auth.error || 'gh auth status did not confirm the login'
+
+    await rollbackLogin()
+
+    return { ok: false, error: msg }
+  }
+
+  return { ok: true, auth }
 }
 
-export async function disconnect (): Promise<{ ok: true }> {
+/**
+ * Undo a login that was written to gh's credential store when a later step of
+ * {@link connect} failed, so the reported state matches the store.
+ *
+ * @returns nothing; failures are best-effort.
+ */
+async function rollbackLogin (): Promise<void> {
   await runGhAuth(['auth', 'logout', '--hostname', DEFAULT_HOSTNAME], { timeout: 60000, input: 'y\n' })
+
+  delete process.env.GH_TOKEN
+  delete process.env.GITHUB_TOKEN
+
+  try {
+    writeSettings({ ...readSettings(), tokenIssuedAt: null, tokenExpiresAt: null })
+  } catch { /* lifetime tracking is best-effort */ }
+}
+
+export interface DisconnectResult {
+  ok: boolean
+  error?: string
+}
+
+export async function disconnect (): Promise<DisconnectResult> {
+  const result = await runGhAuth(['auth', 'logout', '--hostname', DEFAULT_HOSTNAME], {
+    timeout: 60000,
+    input: 'y\n',
+  })
+
+  const output = `${result.stdout}\n${result.stderr}`.trim()
+  // Leaving gh already logged out is the desired end state, not a failure.
+  const loggedOut = result.code === 0 || /not logged in/i.test(output)
+
+  // Never leave the plugin's own token export behind: it shadows gh's store
+  // and keeps the agent authenticated with a token the user asked to drop.
   delete process.env.GH_TOKEN
   delete process.env.GITHUB_TOKEN
 
@@ -487,7 +685,7 @@ export async function disconnect (): Promise<{ ok: true }> {
     writeSettings({ ...readSettings(), tokenIssuedAt: null, tokenExpiresAt: null })
   } catch { /* lifetime tracking is best-effort */ }
 
-  return { ok: true }
+  return loggedOut ? { ok: true } : { ok: false, error: output || 'gh auth logout failed' }
 }
 
 export async function getGitIdentity (): Promise<GitIdentity> {

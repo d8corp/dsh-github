@@ -1,7 +1,6 @@
 import "./_virtual/_rollup-plugin-process-env.mjs";
 import { API_PREFIX } from "./constants.mjs";
 import { buildTrustedHosts } from "./fence.mjs";
-import { migrateLegacyLayout } from "./settings.mjs";
 import { createApiHandler } from "./api.mjs";
 import { cancelUninstallCleanup, profileDeclaresPackage, watchForUninstallCleanup } from "./uninstall.mjs";
 import { resolve } from "node:path";
@@ -28,22 +27,21 @@ const name = "github";
 const inject = ["webServer", "webStartup"];
 function apply(ctx) {
 	cancelUninstallCleanup();
-	migrateLegacyLayout();
 	const trustedHosts = buildTrustedHosts(ctx.webStartup?.trustedHosts, (message) => {
-		console.warn("[@d8corp/dsh-github] ignoring invalid trusted host:", message);
+		console.warn("[dsh-github-app] ignoring invalid trusted host:", message);
 	});
 	const handler = createApiHandler(ctx, { trustedHosts });
 	ctx.effect(() => ctx.webServer.register({
 		kind: "prefix",
 		path: API_PREFIX,
 		handler
-	}), "@d8corp/dsh-github: api");
+	}), "dsh-github-app: api");
 	const profileDir = resolveProfileDir(ctx.baseUrl);
 	if (profileDir !== null && profileDeclaresPackage(profileDir) === true) {
 		const watchedProfileDir = profileDir;
 		ctx.effect(() => () => {
 			watchForUninstallCleanup({ profileDir: watchedProfileDir });
-		}, "@d8corp/dsh-github: uninstall cleanup");
+		}, "dsh-github-app: uninstall cleanup");
 	}
 }
 export { apply, inject, name };
