@@ -1,5 +1,6 @@
 import type { ApiHandler } from './api';
 interface PluginContext {
+    baseUrl?: unknown;
     webStartup?: {
         trustedHosts?: unknown;
     };

@@ -21,20 +21,21 @@ function isLoopbackHostname(hostname) {
 	const parts = (name.startsWith("::ffff:") ? name.slice(7) : name).split(".");
 	return parts.length === 4 && parts[0] === "127" && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
 }
-function canonicalAuthority(authority) {
-	const url = parseAuthority(authority);
-	if (url === void 0) return void 0;
+function canonicalFrom(url, authority) {
 	const explicitPort = /:(\d+)$/.exec(authority.trim());
 	return explicitPort === null ? url.hostname : `${url.hostname}:${explicitPort[1]}`;
+}
+function canonicalAuthority(authority) {
+	const url = parseAuthority(authority);
+	return url === void 0 ? void 0 : canonicalFrom(url, authority);
 }
 function isTrustedAuthority(authority, hostUrl, trustedHosts) {
 	const requestAuthority = canonicalAuthority(authority) || hostUrl.hostname;
 	return trustedHosts.some((entry) => {
 		const url = parseAuthority(entry);
 		if (url === void 0) return false;
-		const canonical = canonicalAuthority(entry);
-		if (canonical === void 0) return false;
-		return /:\d+$/.test(entry.trim()) ? canonical === requestAuthority : url.hostname === hostUrl.hostname;
+		const canonical = canonicalFrom(url, entry);
+		return canonical !== url.hostname ? canonical === requestAuthority : url.hostname === hostUrl.hostname;
 	});
 }
 function buildTrustedHosts(entries, warn) {
@@ -53,9 +54,12 @@ function buildTrustedHosts(entries, warn) {
 	}
 	return trusted;
 }
+function headersOf(req) {
+	return req !== null && typeof req === "object" && "headers" in req && req.headers !== null && typeof req.headers === "object" ? req.headers : {};
+}
 function isTrustedApiRequest(req, trustedHosts = []) {
 	if (req === null || typeof req !== "object") return false;
-	const headers = "headers" in req && req.headers !== null && typeof req.headers === "object" ? req.headers : {};
+	const headers = headersOf(req);
 	const host = typeof headers.host === "string" ? headers.host : void 0;
 	if (host === void 0) return false;
 	const hostUrl = parseAuthority(host);
@@ -71,6 +75,20 @@ function isTrustedApiRequest(req, trustedHosts = []) {
 	} catch {
 		return false;
 	}
+}
+/**
+* Whether a request targets a loopback authority.
+*
+* @param req incoming request carrying a Host header.
+* @returns true for localhost, ::1 and 127.0.0.0/8 authorities.
+*/
+function isLoopbackRequest(req) {
+	if (req === null || typeof req !== "object") return false;
+	const headers = headersOf(req);
+	const host = typeof headers.host === "string" ? headers.host : void 0;
+	if (host === void 0) return false;
+	const authority = parseAuthority(host);
+	return authority !== void 0 && isLoopbackHostname(authority.hostname);
 }
 function readJsonBody(req, maxBytes = MAX_BODY_BYTES) {
 	return new Promise((resolve) => {
@@ -115,4 +133,4 @@ function writeJson(res, status, value) {
 	});
 	res.end(body);
 }
-export { PAYLOAD_TOO_LARGE, buildTrustedHosts, canonicalAuthority, isLoopbackHostname, isTrustedApiRequest, parseAuthority, readJsonBody, writeJson };
+export { PAYLOAD_TOO_LARGE, buildTrustedHosts, canonicalAuthority, isLoopbackHostname, isLoopbackRequest, isTrustedApiRequest, parseAuthority, readJsonBody, writeJson };

@@ -1,6 +1,6 @@
 {
   "name": "@d8corp/dsh-github",
-  "version": "0.0.2-beta.2",
+  "version": "0.0.3",
   "description": "GitHub CLI (gh) integration for DSH: configure a GitHub App and authenticate gh for git operations.",
   "type": "module",
   "main": "index.mjs",
@@ -37,14 +37,6 @@
     "test": "jest",
     "lint": "eslint src --ext .ts,.tsx",
     "lint:fix": "eslint src --ext .ts,.tsx --fix"
-  },
-  "peerDependencies": {
-    "@deepseek-ai/dsh-credentials": ">=0.2.0-rc.0"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-credentials": {
-      "optional": true
-    }
   },
   "dsh": {
     "manifestVersion": "1",

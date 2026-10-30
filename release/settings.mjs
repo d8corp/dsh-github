@@ -1,14 +1,20 @@
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { randomBytes } from "node:crypto";
+import { writeSecretFile } from "./atomicFile.mjs";
+import { KEY_ENCRYPTED_FILENAME, KEY_FILENAME, PLUGIN_DIR_NAME, SETTINGS_FILENAME } from "./constants.mjs";
+import { parseTimestamp } from "./time.mjs";
+import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 // src/settings.ts
 /**
 * Host-side settings for @d8corp/dsh-github.
 *
-* Stored at `$DSH_HOME/github.json` (or `~/.dsh/github.json`). The private key
-* is never stored here — only its path on the host (the key lives in a
-* separate 0600 file).
+* Stored at `$DSH_HOME/dsh-github/github.json` (or `~/.dsh/dsh-github/github.json`).
+* The private key is never stored here — only its path on the host. The key
+* itself lives in a separate 0600 file encrypted with a passphrase that is
+* never persisted.
+*
+* Files written by older releases directly under the DSH home are moved into
+* the plugin directory once by `migrateLegacyLayout()`.
 */
 const MAX_ID_CHARS = 64;
 const MAX_GIT_NAME_CHARS = 128;
@@ -41,8 +47,31 @@ function dshHomeDir(env = process.env) {
 	const configured = env && typeof env.DSH_HOME === "string" ? env.DSH_HOME.trim() : "";
 	return resolve(configured === "" ? join(homedir(), ".dsh") : expandHome(configured));
 }
+/**
+* Plugin-owned data directory under the DSH home.
+*
+* @param env environment to read `DSH_HOME` from.
+* @returns `$DSH_HOME/dsh-github`.
+*/
+function pluginDir(env = process.env) {
+	return join(dshHomeDir(env), PLUGIN_DIR_NAME);
+}
 function settingsPath(env = process.env) {
-	return join(dshHomeDir(env), "github.json");
+	return join(pluginDir(env), SETTINGS_FILENAME);
+}
+/** Pre-directory settings location, still read until the migration moves it. */
+function legacySettingsPath(env = process.env) {
+	return join(dshHomeDir(env), SETTINGS_FILENAME);
+}
+/** Fixed location of the encrypted private key envelope. */
+function encryptedKeyPath(env = process.env) {
+	return join(pluginDir(env), KEY_ENCRYPTED_FILENAME);
+}
+function defaultSettingsFile(env = process.env) {
+	const current = settingsPath(env);
+	if (existsSync(current)) return current;
+	const legacy = legacySettingsPath(env);
+	return existsSync(legacy) ? legacy : current;
 }
 function isPlainObject(value) {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -71,11 +100,8 @@ function normalizePath(value) {
 * @returns canonical ISO string, or null when the value is unusable.
 */
 function normalizeTimestamp(value) {
-	let ms;
-	if (typeof value === "number") ms = value;
-	else if (typeof value === "string" && value.trim() !== "") ms = Date.parse(value);
-	else return null;
-	if (!Number.isFinite(ms) || ms < 0) return null;
+	const ms = parseTimestamp(value);
+	if (ms === null) return null;
 	try {
 		return new Date(ms).toISOString();
 	} catch {
@@ -91,11 +117,12 @@ function normalizeSettings(value) {
 		gitUserEmail: typeof source.gitUserEmail === "string" ? source.gitUserEmail.trim().slice(0, MAX_GIT_EMAIL_CHARS) : "",
 		keyPath: normalizePath(source.keyPath),
 		keyFileName: typeof source.keyFileName === "string" && source.keyFileName.trim() !== "" ? source.keyFileName.trim().slice(0, 255) : null,
+		keyEncrypted: source.keyEncrypted === true,
 		tokenIssuedAt: normalizeTimestamp(source.tokenIssuedAt),
 		tokenExpiresAt: normalizeTimestamp(source.tokenExpiresAt)
 	};
 }
-function readSettings(file = settingsPath()) {
+function readSettings(file = defaultSettingsFile()) {
 	try {
 		return normalizeSettings(JSON.parse(readFileSync(file, "utf8")));
 	} catch {
@@ -104,41 +131,57 @@ function readSettings(file = settingsPath()) {
 }
 function writeSettings(settings, file = settingsPath()) {
 	const normalized = normalizeSettings(settings);
-	const directory = dirname(file);
-	mkdirSync(directory, { recursive: true });
-	const temp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-	const payload = `${JSON.stringify(normalized, null, 2)}\n`;
-	let handle;
-	try {
-		handle = openSync(temp, "w", 384);
-		writeFileSync(handle, payload, "utf8");
-		fsyncSync(handle);
-		closeSync(handle);
-		handle = void 0;
-	} catch (error) {
-		if (handle !== void 0) try {
-			closeSync(handle);
-		} catch {}
-		try {
-			unlinkSync(temp);
-		} catch {}
-		throw error;
-	}
-	try {
-		renameSync(temp, file);
-	} catch (error) {
-		try {
-			unlinkSync(temp);
-		} catch {}
-		throw error;
-	}
-	try {
-		chmodSync(file, 384);
-	} catch {}
+	writeSecretFile(file, `${JSON.stringify(normalized, null, 2)}\n`);
 	return normalized;
+}
+function warn(message) {
+	console.warn(`[@d8corp/dsh-github] ${message}`);
+}
+/**
+* Move the pre-directory layout into `$DSH_HOME/dsh-github/`.
+*
+* Old releases kept `github.json`, `github-app.pem.enc` and the plaintext
+* `github-app.pem` directly under the DSH home. Existing destinations are
+* never overwritten; a failed move leaves the old file in place, and
+* `readSettings()` keeps reading it through the legacy fallback.
+*
+* @param env environment to read `DSH_HOME` from.
+*/
+function migrateLegacyLayout(env = process.env) {
+	const home = dshHomeDir(env);
+	const dir = pluginDir(env);
+	const move = (from, to) => {
+		if (!existsSync(from) || existsSync(to)) return;
+		try {
+			mkdirSync(dir, {
+				recursive: true,
+				mode: 448
+			});
+			renameSync(from, to);
+		} catch (error) {
+			warn(`cannot move ${from} to ${to}: ${error instanceof Error && error.message ? error.message : error}`);
+		}
+	};
+	move(join(home, SETTINGS_FILENAME), join(dir, SETTINGS_FILENAME));
+	move(join(home, KEY_ENCRYPTED_FILENAME), join(dir, KEY_ENCRYPTED_FILENAME));
+	move(join(home, KEY_FILENAME), join(dir, KEY_FILENAME));
+	const settings = readSettings();
+	const legacyKeys = [join(home, KEY_ENCRYPTED_FILENAME), join(home, KEY_FILENAME)];
+	const index = settings.keyPath === null ? -1 : legacyKeys.indexOf(settings.keyPath);
+	if (index === -1) return;
+	const target = join(dir, index === 0 ? KEY_ENCRYPTED_FILENAME : KEY_FILENAME);
+	if (!existsSync(target)) return;
+	try {
+		writeSettings({
+			...settings,
+			keyPath: target
+		});
+	} catch (error) {
+		warn(`cannot repoint keyPath to ${target}: ${error instanceof Error && error.message ? error.message : error}`);
+	}
 }
 function keyFileExists(settings) {
 	const s = normalizeSettings(settings);
 	return !!s.keyPath && existsSync(s.keyPath);
 }
-export { dshHomeDir, keyFileExists, normalizeSettings, readSettings, settingsPath, writeSettings };
+export { dshHomeDir, encryptedKeyPath, keyFileExists, legacySettingsPath, migrateLegacyLayout, normalizeSettings, pluginDir, readSettings, settingsPath, writeSettings };

@@ -6,16 +6,26 @@
  */
 
 import { existsSync, realpathSync, unlinkSync } from 'node:fs'
-import { dirname, isAbsolute, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 import { dshHomeDir } from './settings'
 
-/** Real path when it exists, otherwise a lexically resolved absolute path. */
+/**
+ * Real path when it exists. Missing paths are resolved through their nearest
+ * existing ancestor, so symlinked parents (`/var` → `/private/var` on macOS)
+ * still compare correctly against a real home directory.
+ */
 function realOrResolved (path: string): string {
+  const resolved = resolve(path)
+
   try {
-    return realpathSync.native(path)
+    return realpathSync.native(resolved)
   } catch {
-    return resolve(path)
+    const parent = dirname(resolved)
+
+    if (parent === resolved) return resolved
+
+    return join(realOrResolved(parent), basename(resolved))
   }
 }
 

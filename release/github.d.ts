@@ -1,3 +1,4 @@
+import type { GitIdentity, ToolStatus } from './contracts';
 import type { GithubSettings } from './settings';
 export interface RunOptions {
     cwd?: string;
@@ -13,10 +14,6 @@ export interface RunResult {
     stderr: string;
     error: Error | null;
 }
-export interface ToolInfo {
-    installed: boolean;
-    version: string | null;
-}
 export interface InstallResult {
     ok: boolean;
     version?: string | null;
@@ -26,10 +23,6 @@ export interface InstallResult {
 export interface InstallGhResult extends InstallResult {
     gh: InstallResult;
     git: InstallResult;
-}
-export interface GitIdentity {
-    name: string;
-    email: string;
 }
 export interface AuthStatus {
     loggedIn: boolean;
@@ -44,12 +37,8 @@ export interface ConnectResult {
     partial?: boolean;
     auth?: AuthStatus;
 }
-export declare function getGhInfo(): Promise<ToolInfo>;
-export declare function getGitInfo(): Promise<ToolInfo>;
-export declare const getGitVersion: typeof getGitInfo;
-export declare const getGitCliInfo: typeof getGitInfo;
-export declare const getGitCliVersion: typeof getGitInfo;
-export declare const getGitInfoVersion: typeof getGitInfo;
+export declare function getGhInfo(): Promise<ToolStatus>;
+export declare function getGitInfo(): Promise<ToolStatus>;
 /**
  * Decide whether `gh auth status` output describes a usable authentication.
  *
@@ -68,15 +57,19 @@ export declare const getGitInfoVersion: typeof getGitInfo;
 export declare function isLoggedInOutput(output: unknown): boolean;
 export declare function getAuthStatus(hostname?: string): Promise<AuthStatus>;
 export declare function installGit(): Promise<InstallResult>;
-export declare const installGitCli: typeof installGit;
-export declare const installGitVersion: typeof installGit;
-export declare const installGitTool: typeof installGit;
 export declare function installGh(): Promise<InstallGhResult>;
-export declare const install: typeof installGh;
-export declare const installMissing: typeof installGh;
-export declare const installCli: typeof installGh;
-export declare const installTools: typeof installGh;
-export declare function connect(settings?: Partial<GithubSettings> | null): Promise<ConnectResult>;
+/**
+ * Exchange the GitHub App private key for an installation token.
+ *
+ * The key file is encrypted at rest, so the passphrase is required on every
+ * call: the decrypted PEM lives only for the duration of this operation and is
+ * never cached in the server process.
+ *
+ * @param settings persisted App ID, installation ID and key location.
+ * @param passphrase passphrase protecting the key file.
+ * @returns the connection outcome and refreshed auth status.
+ */
+export declare function connect(settings?: Partial<GithubSettings> | null, passphrase?: unknown): Promise<ConnectResult>;
 export declare function disconnect(): Promise<{
     ok: true;
 }>;
