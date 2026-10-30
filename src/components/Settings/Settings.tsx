@@ -149,15 +149,6 @@ export function Settings () {
     event.target.value = ''
   }
 
-  async function handleEncrypt (): Promise<void> {
-    if (!requirePassphrase()) return
-
-    await withBusy(async () => {
-      await callApi('encryptKey', { passphrase })
-      setMessage({ kind: 'success', text: 'Private key encrypted.' })
-    })
-  }
-
   async function handleConnect (): Promise<void> {
     if (!requirePassphrase()) return
 
@@ -191,7 +182,7 @@ export function Settings () {
 
   const gh: ToolStatus = status?.gh ?? { installed: false, version: null }
   const git: ToolStatus = status?.git ?? { installed: false, version: null }
-  const config: StatusConfig = status?.config ?? { hasKey: false, keyEncrypted: false, keyFileName: null, appId: '', installationId: '', gitUserName: '', gitUserEmail: '' }
+  const config: StatusConfig = status?.config ?? { hasKey: false, keyFileName: null, appId: '', installationId: '', gitUserName: '', gitUserEmail: '' }
   const auth: StatusAuth = status?.auth ?? { loggedIn: false, gitConfigured: false }
   const token = status?.token ?? null
   const toolsReady = gh.installed && git.installed
@@ -232,10 +223,6 @@ export function Settings () {
 
   let connDesc = 'Authenticate GitHub CLI with a GitHub App'
 
-  if (config.hasKey && !config.keyEncrypted) {
-    connDesc += '\nPrivate key is unencrypted: set a passphrase and click Encrypt key.'
-  }
-
   if (!auth.loggedIn && auth.error) {
     connDesc += '\n' + auth.error
   }
@@ -265,7 +252,7 @@ export function Settings () {
   } else {
     connectionControl = (
       <Button
-        disabled={formDisabled || !config.hasKey || !config.keyEncrypted || !appId || !installationId}
+        disabled={formDisabled || !config.hasKey || !appId || !installationId}
         onClick={handleConnect}
       >
         {busy ? 'Connecting…' : 'Connect'}
@@ -338,7 +325,7 @@ export function Settings () {
       <Row
         key='passphrase'
         title='Key passphrase'
-        description='Encrypts the private key at rest. It is never stored and is required for upload, encryption and every connect.'
+        description='Encrypts the private key at rest. It is never stored and is required for upload and every connect.'
         control={(
           <Input
             type='password'
@@ -354,28 +341,13 @@ export function Settings () {
         title='Private key (.pem)'
         description={!config.hasKey
           ? 'Upload the GitHub App private key'
-          : (config.keyEncrypted
-              ? 'Key uploaded and encrypted' + (config.keyFileName ? ' (' + config.keyFileName + ')' : '')
-              : 'Key uploaded without encryption' + (config.keyFileName ? ' (' + config.keyFileName + ')' : '') + ' — set a passphrase and encrypt it')}
+          : 'Key uploaded and encrypted' + (config.keyFileName ? ' (' + config.keyFileName + ')' : '')}
         control={(
-          <>
-            <FileInput
-              accept='.pem'
-              disabled={formDisabled}
-              onChange={handleUpload}
-            />
-            {config.hasKey && !config.keyEncrypted
-              ? (
-                <Button
-                  variant='secondary'
-                  disabled={formDisabled}
-                  onClick={handleEncrypt}
-                >
-                  {busy ? 'Encrypting…' : 'Encrypt key'}
-                </Button>
-                )
-              : null}
-          </>
+          <FileInput
+            accept='.pem'
+            disabled={formDisabled}
+            onChange={handleUpload}
+          />
         )}
       />
       <Row

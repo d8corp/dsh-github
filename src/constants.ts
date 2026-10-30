@@ -13,9 +13,6 @@ export const PLUGIN_DIR_NAME = 'dsh-github-app'
 /** Settings file name inside the plugin directory. */
 export const SETTINGS_FILENAME = 'github.json'
 
-/** Private key file name inside the plugin directory (legacy, unencrypted). */
-export const KEY_FILENAME = 'github-app.pem'
-
 /** Encrypted private key file name inside the plugin directory. */
 export const KEY_ENCRYPTED_FILENAME = 'github-app.pem.enc'
 

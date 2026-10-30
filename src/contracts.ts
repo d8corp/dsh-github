@@ -27,7 +27,6 @@ export interface StatusConfig {
   gitUserEmail: string
   keyFileName: string | null
   hasKey: boolean
-  keyEncrypted: boolean
 }
 
 export interface StatusToken {

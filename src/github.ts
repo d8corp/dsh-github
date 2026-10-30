@@ -391,10 +391,6 @@ export async function connect (settings?: Partial<GithubSettings> | null, passph
     return { ok: false, error: 'Missing appId, installationId or key file' }
   }
 
-  if (s.keyEncrypted !== true) {
-    return { ok: false, error: 'Private key is stored unencrypted. Encrypt it with a passphrase first.' }
-  }
-
   const invalidPassphrase = passphraseError(passphrase)
 
   if (invalidPassphrase !== null) return { ok: false, error: invalidPassphrase }

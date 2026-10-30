@@ -5,7 +5,6 @@ import type { ApiHandler } from './api'
 import { createApiHandler } from './api'
 import { API_PREFIX } from './constants'
 import { buildTrustedHosts } from './fence'
-import { migrateLegacyLayout } from './settings'
 import {
   cancelUninstallCleanup,
   profileDeclaresPackage,
@@ -52,8 +51,6 @@ export const inject = ['webServer', 'webStartup']
 export function apply (ctx: PluginContext): void {
   // A new instance means any watcher from the previous one is moot.
   cancelUninstallCleanup()
-
-  migrateLegacyLayout()
 
   const trustedHosts = buildTrustedHosts(ctx.webStartup?.trustedHosts, (message) => {
     // eslint-disable-next-line no-console

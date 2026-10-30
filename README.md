@@ -13,7 +13,7 @@ Open **Settings → GitHub**:
 - Key passphrase and private key upload (.pem); the key is encrypted at rest with scrypt + AES-256-GCM (mode 0600) and never returned to the browser
 - Connect / Disconnect
 
-The passphrase is not stored anywhere and is required for upload, for encrypting a legacy key, and for every Connect. Losing it means uploading the key again. Keys saved by older versions as plaintext are rejected until you set a passphrase and click **Encrypt key**.
+The passphrase is not stored anywhere and is required for upload and for every Connect. Losing it means uploading the key again.
 
 Parameters are saved automatically on change.
 

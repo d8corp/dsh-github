@@ -5,17 +5,14 @@
  * The private key is never stored here — only its path on the host. The key
  * itself lives in a separate 0600 file encrypted with a passphrase that is
  * never persisted.
- *
- * Files written by older releases directly under the DSH home are moved into
- * the plugin directory once by `migrateLegacyLayout()`.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 import { writeSecretFile } from './atomicFile'
-import { KEY_ENCRYPTED_FILENAME, KEY_FILENAME, PLUGIN_DIR_NAME, SETTINGS_FILENAME } from './constants'
+import { KEY_ENCRYPTED_FILENAME, PLUGIN_DIR_NAME, SETTINGS_FILENAME } from './constants'
 import { parseTimestamp } from './time'
 
 export interface GithubSettings {
@@ -25,7 +22,6 @@ export interface GithubSettings {
   gitUserEmail: string
   keyPath: string | null
   keyFileName: string | null
-  keyEncrypted: boolean
   tokenIssuedAt: string | null
   tokenExpiresAt: string | null
 }
@@ -80,24 +76,9 @@ export function settingsPath (env: NodeJS.ProcessEnv = process.env): string {
   return join(pluginDir(env), SETTINGS_FILENAME)
 }
 
-/** Pre-directory settings location, still read until the migration moves it. */
-export function legacySettingsPath (env: NodeJS.ProcessEnv = process.env): string {
-  return join(dshHomeDir(env), SETTINGS_FILENAME)
-}
-
 /** Fixed location of the encrypted private key envelope. */
 export function encryptedKeyPath (env: NodeJS.ProcessEnv = process.env): string {
   return join(pluginDir(env), KEY_ENCRYPTED_FILENAME)
-}
-
-function defaultSettingsFile (env: NodeJS.ProcessEnv = process.env): string {
-  const current = settingsPath(env)
-
-  if (existsSync(current)) return current
-
-  const legacy = legacySettingsPath(env)
-
-  return existsSync(legacy) ? legacy : current
 }
 
 function isPlainObject (value: unknown): value is Record<string, unknown> {
@@ -155,13 +136,12 @@ export function normalizeSettings (value: unknown): GithubSettings {
     keyFileName: typeof source.keyFileName === 'string' && source.keyFileName.trim() !== ''
       ? source.keyFileName.trim().slice(0, 255)
       : null,
-    keyEncrypted: source.keyEncrypted === true,
     tokenIssuedAt: normalizeTimestamp(source.tokenIssuedAt),
     tokenExpiresAt: normalizeTimestamp(source.tokenExpiresAt),
   }
 }
 
-export function readSettings (file = defaultSettingsFile()): GithubSettings {
+export function readSettings (file = settingsPath()): GithubSettings {
   try {
     return normalizeSettings(JSON.parse(readFileSync(file, 'utf8')))
   } catch {
@@ -175,57 +155,6 @@ export function writeSettings (settings: unknown, file = settingsPath()): Github
   writeSecretFile(file, `${JSON.stringify(normalized, null, 2)}\n`)
 
   return normalized
-}
-
-function warn (message: string): void {
-  // eslint-disable-next-line no-console
-  console.warn(`[dsh-github-app] ${message}`)
-}
-
-/**
- * Move the pre-directory layout into `$DSH_HOME/dsh-github-app/`.
- *
- * Old releases kept `github.json`, `github-app.pem.enc` and the plaintext
- * `github-app.pem` directly under the DSH home. Existing destinations are
- * never overwritten; a failed move leaves the old file in place, and
- * `readSettings()` keeps reading it through the legacy fallback.
- *
- * @param env environment to read `DSH_HOME` from.
- */
-export function migrateLegacyLayout (env: NodeJS.ProcessEnv = process.env): void {
-  const home = dshHomeDir(env)
-  const dir = pluginDir(env)
-
-  const move = (from: string, to: string): void => {
-    if (!existsSync(from) || existsSync(to)) return
-
-    try {
-      mkdirSync(dir, { recursive: true, mode: 0o700 })
-      renameSync(from, to)
-    } catch (error) {
-      warn(`cannot move ${from} to ${to}: ${error instanceof Error && error.message ? error.message : error}`)
-    }
-  }
-
-  move(join(home, SETTINGS_FILENAME), join(dir, SETTINGS_FILENAME))
-  move(join(home, KEY_ENCRYPTED_FILENAME), join(dir, KEY_ENCRYPTED_FILENAME))
-  move(join(home, KEY_FILENAME), join(dir, KEY_FILENAME))
-
-  const settings = readSettings()
-  const legacyKeys = [join(home, KEY_ENCRYPTED_FILENAME), join(home, KEY_FILENAME)]
-  const index = settings.keyPath === null ? -1 : legacyKeys.indexOf(settings.keyPath)
-
-  if (index === -1) return
-
-  const target = join(dir, index === 0 ? KEY_ENCRYPTED_FILENAME : KEY_FILENAME)
-
-  if (!existsSync(target)) return
-
-  try {
-    writeSettings({ ...settings, keyPath: target })
-  } catch (error) {
-    warn(`cannot repoint keyPath to ${target}: ${error instanceof Error && error.message ? error.message : error}`)
-  }
 }
 
 export function keyFileExists (settings: unknown): boolean {

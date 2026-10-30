@@ -14,16 +14,10 @@
  * (`dsh plugin remove`) leaves the data directory for manual cleanup.
  */
 
-import { existsSync, readFileSync, rmSync, unlinkSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
-import {
-  KEY_ENCRYPTED_FILENAME,
-  KEY_FILENAME,
-  PACKAGE_NAME,
-  PLUGIN_DIR_NAME,
-  SETTINGS_FILENAME,
-} from './constants'
+import { PACKAGE_NAME, PLUGIN_DIR_NAME } from './constants'
 import { dshHomeDir, pluginDir } from './settings'
 
 /** How often the watcher re-reads the profile manifest. */
@@ -74,11 +68,11 @@ export function profileDeclaresPackage (
 }
 
 /**
- * Delete the plugin directory and the files older releases kept directly in
- * the DSH home. Paths are derived from `DSH_HOME`, never from user input.
+ * Delete the plugin data directory. Paths are derived from `DSH_HOME`, never
+ * from user input.
  *
  * @param env environment to read `DSH_HOME` from.
- * @returns true when at least one artifact was removed.
+ * @returns true when the directory was removed.
  */
 export function removePluginArtifacts (env: NodeJS.ProcessEnv = process.env): boolean {
   const home = resolve(dshHomeDir(env))
@@ -88,22 +82,10 @@ export function removePluginArtifacts (env: NodeJS.ProcessEnv = process.env): bo
   // of the harness home, so a bad environment cannot widen the blast radius.
   if (dir !== join(home, PLUGIN_DIR_NAME)) return false
 
-  let removed = false
+  if (!existsSync(dir)) return false
 
   try {
-    if (existsSync(dir)) {
-      rmSync(dir, { recursive: true, force: true })
-      removed = true
-    }
-
-    for (const name of [SETTINGS_FILENAME, KEY_ENCRYPTED_FILENAME, KEY_FILENAME]) {
-      const file = join(home, name)
-
-      if (!existsSync(file)) continue
-
-      unlinkSync(file)
-      removed = true
-    }
+    rmSync(dir, { recursive: true, force: true })
   } catch (error) {
     // eslint-disable-next-line no-console
     console.warn(
@@ -114,7 +96,7 @@ export function removePluginArtifacts (env: NodeJS.ProcessEnv = process.env): bo
     return false
   }
 
-  return removed
+  return true
 }
 
 export interface UninstallCleanupOptions {

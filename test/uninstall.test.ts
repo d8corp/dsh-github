@@ -130,7 +130,7 @@ describe('profileDeclaresPackage', () => {
 })
 
 describe('removePluginArtifacts', () => {
-  it('removes the plugin directory and legacy files', () => {
+  it('removes the plugin directory', () => {
     const root = makeRoot()
 
     try {
@@ -139,15 +139,9 @@ describe('removePluginArtifacts', () => {
 
       mkdirSync(dir, { recursive: true })
       writeFileSync(join(dir, 'github.json'), '{}')
-      writeFileSync(join(root, 'github.json'), '{}')
-      writeFileSync(join(root, 'github-app.pem'), 'pem')
-      writeFileSync(join(root, 'github-app.pem.enc'), 'envelope')
 
       expect(removePluginArtifacts(env)).toBe(true)
       expect(existsSync(dir)).toBe(false)
-      expect(existsSync(join(root, 'github.json'))).toBe(false)
-      expect(existsSync(join(root, 'github-app.pem'))).toBe(false)
-      expect(existsSync(join(root, 'github-app.pem.enc'))).toBe(false)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

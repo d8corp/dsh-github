@@ -1,4 +1,3 @@
-import { existsSync, readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { writeSecretFile } from './atomicFile'
@@ -167,7 +166,6 @@ async function statusPayload (): Promise<StatusPayload> {
       gitUserEmail: settings.gitUserEmail,
       keyFileName: settings.keyFileName,
       hasKey: keyFileExists(settings),
-      keyEncrypted: settings.keyEncrypted,
     },
     auth,
     token: {
@@ -281,7 +279,6 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
             }
 
             patch.keyPath = stored.keyPath
-            patch.keyEncrypted = true
             uploadedName = typeof payload.pemFileName === 'string' ? payload.pemFileName.trim() : ''
           }
 
@@ -309,57 +306,13 @@ export function createApiHandler (ctx: unknown, { trustedHosts }: { trustedHosts
           break
         }
 
-        case 'encryptKey': {
-          const current = readSettings()
-
-          if (!current.keyPath || !existsSync(current.keyPath)) {
-            fail(res, 400, 'No private key to encrypt')
-            break
-          }
-
-          if (current.keyEncrypted) {
-            ok(res, { settings: current, status: await statusPayload() })
-            break
-          }
-
-          if (!isInsideDshHome(current.keyPath)) {
-            fail(res, 400, 'Private key is outside the DSH home; upload it again to encrypt.')
-            break
-          }
-
-          let pemText: string
-
-          try {
-            pemText = readFileSync(current.keyPath, 'utf8')
-          } catch {
-            fail(res, 400, 'Cannot read private key')
-            break
-          }
-
-          const stored = await storeEncryptedKey(pemText, payload.passphrase).finally(() => {
-            pemText = ''
-          })
-
-          if (!stored.ok) {
-            fail(res, stored.status, stored.message)
-            break
-          }
-
-          const next = writeSettings({ ...readSettings(), keyPath: stored.keyPath, keyEncrypted: true })
-
-          removeSecretFile(current.keyPath)
-
-          ok(res, { settings: next, status: await statusPayload() })
-          break
-        }
-
         case 'clearConfig': {
           const current = readSettings()
 
           removeSecretFile(current.keyPath)
           removeSecretFile(encryptedKeyPath())
 
-          writeSettings({ appId: '', installationId: '', keyPath: null, keyFileName: null, keyEncrypted: false })
+          writeSettings({ appId: '', installationId: '', keyPath: null, keyFileName: null })
           ok(res, await statusPayload())
           break
         }
