@@ -1,4 +1,5 @@
 import type * as ReactTypes from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { MIN_PASSPHRASE_CHARS, TOKEN_TTL_SECONDS } from '../../constants'
 import type { StatusAuth, StatusConfig, StatusPayload, ToolStatus } from '../../contracts'
@@ -10,7 +11,7 @@ import { Input } from '../../ui/Input'
 import { Notice } from '../../ui/Notice'
 import { Row } from '../../ui/Raw'
 import { Status } from '../../ui/Status'
-import { callApi, errorMessage, getReact, resolveTokenExpiry } from '../../utils'
+import { callApi, errorMessage, resolveTokenExpiry } from '../../utils'
 
 interface GithubActionResult {
   ok?: boolean
@@ -65,8 +66,6 @@ function readFileAsBase64 (file: File): Promise<string> {
 }
 
 export function Settings () {
-  const React = getReact()
-  const { useState, useEffect, useRef } = React
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<GithubMessage | null>(null)

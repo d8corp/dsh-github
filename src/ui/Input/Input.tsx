@@ -1,5 +1,3 @@
-import { getReact } from '../../utils'
-
 export interface InputProps {
   value: string
   onChange: (value: string) => void
@@ -9,8 +7,6 @@ export interface InputProps {
 }
 
 export function Input ({ value, onChange, type = 'text', placeholder, disabled }: InputProps) {
-  const React = getReact()
-
   return (
     <input
       className='gh-input'

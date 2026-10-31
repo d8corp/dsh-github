@@ -1,7 +1,5 @@
 import type * as ReactTypes from 'react'
 
-import { getReact } from '../../utils'
-
 export interface ButtonProps {
   children: ReactTypes.ReactNode
   variant?: 'primary' | 'secondary'
@@ -10,8 +8,6 @@ export interface ButtonProps {
 }
 
 export function Button ({ children, variant = 'primary', disabled, onClick }: ButtonProps) {
-  const React = getReact()
-
   return (
     <button
       className={'gh-button gh-' + variant}

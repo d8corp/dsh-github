@@ -1,7 +1,5 @@
 import type * as ReactTypes from 'react'
 
-import { getReact } from '../../utils'
-
 export interface RowProps {
   title: string
   description?: string
@@ -10,8 +8,6 @@ export interface RowProps {
 }
 
 export function Row ({ title, description, control, badge }: RowProps) {
-  const React = getReact()
-
   return (
     <div className='gh-row'>
       <div className='gh-text'>

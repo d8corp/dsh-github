@@ -1,4 +1,6 @@
-import { formatRemaining, getReact, tokenLevel } from '../../utils'
+import { useEffect, useRef, useState } from 'react'
+
+import { formatRemaining, tokenLevel } from '../../utils'
 
 export interface CountdownProps {
   expiresAt: number | null
@@ -7,8 +9,6 @@ export interface CountdownProps {
 
 /** Live `mm:ss` / `h:mm:ss` timer for the installation token lifetime. */
 export function Countdown ({ expiresAt, onExpired }: CountdownProps) {
-  const React = getReact()
-  const { useEffect, useRef, useState } = React
   const [now, setNow] = useState(() => Date.now())
   const expiredRef = useRef<number | null>(null)
 
