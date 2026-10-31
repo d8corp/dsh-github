@@ -7,8 +7,10 @@ import * as sass from 'sass'
 
 const INPUT_SCSS = 'theme.scss'
 const OUTPUT_ENV = '.env.theme'
-// innetjs only exposes INNETJS_-prefixed variables to the client bundle.
-const CSS_KEY = 'INNETJS_CSS'
+// Must start with INNETJS_ENV_PREFIX from .env, which innetjs uses to select
+// the host variables exposed to the client bundle. The DSH plugin namespace
+// keeps the variable self-describing and collision-free.
+const CSS_KEY = 'DSH_PLUGIN_GITHUB_APP_CSS'
 
 const minifier = postcss([cssnano({ preset: 'default' })])
 
@@ -33,7 +35,7 @@ async function generateEnvFromScss () {
   const added = CSS_KEY in existing ? 0 : 1
   const updated = CSS_KEY in existing && existing[CSS_KEY] !== minified ? 1 : 0
 
-  writeEnv(OUTPUT_ENV, { ...existing, [CSS_KEY]: minified })
+  writeEnv(OUTPUT_ENV, { [CSS_KEY]: minified })
 
   console.log(`Successfully updated ${OUTPUT_ENV} (Updated: ${updated}, Added: ${added})`)
 }

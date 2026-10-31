@@ -3,6 +3,6 @@ export function ensureStyles (id: string): void {
   if (document.querySelector(`style[data-plugin="${id}"]`) !== null) return
   const tag = document.createElement('style')
   tag.dataset.plugin = id
-  tag.textContent = import.meta.env.INNETJS_CSS || ''
+  tag.textContent = import.meta.env.DSH_PLUGIN_GITHUB_APP_CSS || ''
   document.head.appendChild(tag)
 }
